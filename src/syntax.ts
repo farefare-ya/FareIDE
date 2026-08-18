@@ -137,7 +137,7 @@ function highlightHtmlRaw(code: string): string {
     { re: /<style[^>]*>[\s\S]*?<\/style>/i, cls: '' },
     // script block — highlight JS inside
     { re: /<script[^>]*>[\s\S]*?<\/script>/i, cls: '' },
-    { re: /<\/?\s*[a-zA-Z][a-zA-Z0-9:-]*(?:\s[^>]*)?\s*\/?>/, cls: '' },
+    { re: /<\/?\s*[a-zA-Z][a-zA-Z0-9:-]*(?:\s[^<>]*)?\s*\/?>/, cls: '' },
     { re: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, cls: 'string' },
     { re: /&[#a-zA-Z]\w*;/, cls: 'symbol' },
   ]
