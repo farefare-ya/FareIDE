@@ -18,7 +18,7 @@ import { php, phpLanguage } from '@codemirror/lang-php'
 import { json } from '@codemirror/lang-json'
 import { markdown } from '@codemirror/lang-markdown'
 import { xml } from '@codemirror/lang-xml'
-import { cpp } from '@codemirror/lang-cpp'
+import { cpp, cppLanguage } from '@codemirror/lang-cpp'
 import { java } from '@codemirror/lang-java'
 import { rust } from '@codemirror/lang-rust'
 import { sql } from '@codemirror/lang-sql'
@@ -120,6 +120,16 @@ const phpSnippets = [
   snippetCompletion('foreach (${$arr} as ${$value}) {\n    ${}\n}', { label: 'foreach', detail: 'loop', type: 'keyword' }),
 ]
 
+const cppSnippets = [
+  snippetCompletion('#include <${iostream}>', { label: 'include', detail: 'header include', type: 'keyword' }),
+  snippetCompletion('int main() {\n    ${}\n    return 0;\n}', { label: 'main', detail: 'entry point', type: 'keyword' }),
+  snippetCompletion('for (int ${i} = 0; ${i} < ${n}; ${i}++) {\n    ${}\n}', { label: 'for', detail: 'loop', type: 'keyword' }),
+  snippetCompletion('if (${condition}) {\n    ${}\n}', { label: 'if', detail: 'conditional', type: 'keyword' }),
+  snippetCompletion('void ${name}(${params}) {\n    ${}\n}', { label: 'function', detail: 'function', type: 'keyword' }),
+  snippetCompletion('class ${Name} {\npublic:\n    ${Name}(${params}) {\n        ${}\n    }\n};', { label: 'class', detail: 'class', type: 'keyword' }),
+  snippetCompletion('struct ${Name} {\n    ${}\n};', { label: 'struct', detail: 'struct', type: 'keyword' }),
+]
+
 // ── Language + snippet resolution per file path ────────────────────────────────
 
 function getEditorExtensions(path: string): Extension[] {
@@ -147,7 +157,7 @@ function getEditorExtensions(path: string): Extension[] {
     case 'xml':
       return [...base, xml()]
     case 'cpp':
-      return [...base, cpp()]
+      return [...base, cpp(), cppLanguage.data.of({ autocomplete: completeFromList(cppSnippets) })]
     case 'java':
       return [...base, java()]
     case 'rust':
@@ -476,11 +486,6 @@ export default function App() {
       {/* Title bar */}
       <div className="flex items-center justify-between h-10 px-4 bg-[var(--bg-panel)] border-b border-[var(--border)] shrink-0">
         <div className="flex items-center gap-3">
-          <div className="flex gap-1.5">
-            <div className="w-3 h-3 rounded-full bg-[var(--danger)]" />
-            <div className="w-3 h-3 rounded-full bg-[var(--warning)]" />
-            <div className="w-3 h-3 rounded-full bg-[var(--success)]" />
-          </div>
           <span className="text-[13px] font-semibold tracking-tight">
             <span className="text-[var(--accent)]">Fare</span>
             <span className="text-[var(--text-primary)]">IDE</span>

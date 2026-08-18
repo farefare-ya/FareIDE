@@ -36,6 +36,8 @@ export function getLang(filename: string): string | null {
 }
 
 export function getLangLabel(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? ''
+  if (ext === 'c' || ext === 'h') return 'C'
   const lang = getLang(filename)
   return lang ? (LANG_LABELS[lang] ?? lang) : 'Plain Text'
 }
