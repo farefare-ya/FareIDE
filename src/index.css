@@ -4,61 +4,105 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; padding: 0; }
-body { font-family: 'Inter', system-ui, sans-serif; background: #0a0a0e; color: #e2e4ea; overflow: hidden; }
 
-/* ── Syntax highlighting (custom dark theme) ─────────────────────────────── */
-.hljs { background: transparent; color: #dde1ee; }
+/* ── Theme tokens ─────────────────────────────────────────────────────────── */
+/* Actual syntax highlighting now lives in CodeMirror (see App.tsx) — these
+   variables drive both the app chrome and the editor, so switching theme
+   just means swapping this one block. */
 
-/* Comments */
-.hljs-comment, .hljs-quote { color: #4a5068; font-style: italic; }
+:root, [data-theme="dark"] {
+  --bg-app: #0a0a0e;
+  --bg-panel: #0c0c11;
+  --bg-elevated: #14141c;
+  --bg-control: #1a1a24;
+  --border: #1c1c28;
+  --border-soft: #2a2a38;
 
-/* Keywords: if, for, def, class, import, return, etc. */
-.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-name, .hljs-tag { color: #c792ea; }
+  --text-primary: #e2e4ea;
+  --text-secondary: #9ca0b0;
+  --text-dim: #4a5068;
 
-/* Strings */
-.hljs-string, .hljs-attr, .hljs-symbol, .hljs-bullet, .hljs-addition { color: #c3e88d; }
+  --accent: #7c6af7;
+  --accent-soft: #c4b9ff;
+  --accent-strong: #6a59e0;
+  --accent-wash: #7c6af720;
+  --accent-active: #7c6af730;
+  --accent-select: #7c6af740;
+  --accent-outline: #7c6af760;
+  --accent-on-solid: #d9d2ff;
 
-/* Numbers, booleans, constants */
-.hljs-number, .hljs-literal, .hljs-variable, .hljs-template-variable { color: #f78c6c; }
+  --overlay-hover: #ffffff08;
+  --danger: #ff5f57;
+  --danger-wash: #ff5f5720;
+  --warning: #febc2e;
+  --success: #28c840;
 
-/* Functions, methods */
-.hljs-title, .hljs-section, .hljs-attribute { color: #82aaff; }
+  --syn-comment: #4a5068;
+  --syn-keyword: #c792ea;
+  --syn-string: #c3e88d;
+  --syn-number: #f78c6c;
+  --syn-function: #82aaff;
+  --syn-type: #ffcb6b;
+  --syn-operator: #89ddff;
+  --syn-tag: #f07178;
+  --syn-text: #dde1ee;
+}
 
-/* Types, classes */
-.hljs-type, .hljs-class .hljs-title, .hljs-params { color: #ffcb6b; }
+/* Light mode: a soft lavender-tinted off-white canvas, not stark white —
+   nothing here should read as a "flashbang" the way a pure #fff panel would. */
+[data-theme="light"] {
+  --bg-app: #f5f3fa;
+  --bg-panel: #ece9f4;
+  --bg-elevated: #f9f7fd;
+  --bg-control: #e7e3f1;
+  --border: #ddd8ea;
+  --border-soft: #cdc6e0;
 
-/* Operators, punctuation */
-.hljs-operator { color: #89ddff; }
+  --text-primary: #211f30;
+  --text-secondary: #5d5a72;
+  --text-dim: #9490a8;
 
-/* Decorators, meta */
-.hljs-meta, .hljs-meta .hljs-string { color: #f07178; }
+  --accent: #6d56e8;
+  --accent-soft: #4a37c9;
+  --accent-strong: #5843d6;
+  --accent-wash: #6d56e81a;
+  --accent-active: #6d56e82b;
+  --accent-select: #6d56e840;
+  --accent-outline: #6d56e866;
+  --accent-on-solid: #eae5ff;
 
-/* CSS selectors, properties */
-.hljs-selector-class, .hljs-selector-id, .hljs-selector-attr, .hljs-selector-pseudo { color: #ffcb6b; }
-.hljs-property { color: #82aaff; }
+  --overlay-hover: #00000008;
+  --danger: #d6433c;
+  --danger-wash: #d6433c1a;
+  --warning: #b8791c;
+  --success: #1f9c3a;
 
-/* HTML tags and attributes */
-.hljs-tag .hljs-name { color: #f07178; }
-.hljs-tag .hljs-attr { color: #ffcb6b; }
+  --syn-comment: #918dab;
+  --syn-keyword: #7c3fd4;
+  --syn-string: #2f8132;
+  --syn-number: #c1560a;
+  --syn-function: #1e5fc2;
+  --syn-type: #9c6b00;
+  --syn-operator: #0f8a99;
+  --syn-tag: #c23c34;
+  --syn-text: #211f30;
+}
 
-/* PHP specific */
-.hljs-variable { color: #f78c6c; }
-
-/* Deletion */
-.hljs-deletion { color: #f07178; }
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  overflow: hidden;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
 
 /* ── Scrollbars ───────────────────────────────────────────────────────────── */
 .scrollbar-thin::-webkit-scrollbar { width: 4px; }
 .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-.scrollbar-thin::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 2px; }
-.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #3e4256; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 2px; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 .scrollbar-none::-webkit-scrollbar { display: none; }
 .scrollbar-none { scrollbar-width: none; }
 
-textarea::-webkit-scrollbar { width: 6px; height: 6px; }
-textarea::-webkit-scrollbar-track { background: transparent; }
-textarea::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 3px; }
-textarea::-webkit-scrollbar-thumb:hover { background: #3e4256; }
-
-::selection { background: #7c6af740; color: #e2e4ea; }
+::selection { background: var(--accent-select); color: var(--text-primary); }
