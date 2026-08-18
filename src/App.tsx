@@ -1,53 +1,148 @@
-import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import JSZip from 'jszip'
-import { highlightCode, getLang, getLangLabel, getCompletionWords, getSnippets, isVoidHtmlTag, getHtml5Boilerplate } from './syntax'
+import { getLang, getLangLabel } from './syntax'
 
-// ── Editor intelligence helpers (auto-indent, auto-pair, auto-close tags, autocomplete) ─
+import CodeMirror from '@uiw/react-codemirror'
+import { EditorView, keymap } from '@codemirror/view'
+import type { Extension } from '@codemirror/state'
+import { indentWithTab } from '@codemirror/commands'
+import { HighlightStyle, syntaxHighlighting, StreamLanguage } from '@codemirror/language'
+import { snippetCompletion, completeFromList } from '@codemirror/autocomplete'
+import { tags as t } from '@lezer/highlight'
 
-const PAIR_CLOSERS: Record<string, string> = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' }
-const CLOSER_CHARS = new Set(Object.values(PAIR_CLOSERS))
+import { html, htmlLanguage } from '@codemirror/lang-html'
+import { css } from '@codemirror/lang-css'
+import { javascript, javascriptLanguage } from '@codemirror/lang-javascript'
+import { python, pythonLanguage } from '@codemirror/lang-python'
+import { php, phpLanguage } from '@codemirror/lang-php'
+import { json } from '@codemirror/lang-json'
+import { markdown } from '@codemirror/lang-markdown'
+import { xml } from '@codemirror/lang-xml'
+import { cpp } from '@codemirror/lang-cpp'
+import { java } from '@codemirror/lang-java'
+import { rust } from '@codemirror/lang-rust'
+import { sql } from '@codemirror/lang-sql'
+import { yaml } from '@codemirror/lang-yaml'
+import { shell } from '@codemirror/legacy-modes/mode/shell'
+import { go as goMode } from '@codemirror/legacy-modes/mode/go'
 
-let cachedCharWidth: number | null = null
-function getMonoCharWidth(): number {
-  if (cachedCharWidth != null) return cachedCharWidth
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return 8.1
-  ctx.font = "13.5px 'JetBrains Mono', monospace"
-  cachedCharWidth = ctx.measureText('M').width || 8.1
-  return cachedCharWidth
-}
+// ── CodeMirror theme — matches FareIDE's dark purple aesthetic ────────────────
 
-function extractWords(text: string): string[] {
-  const set = new Set<string>()
-  const re = /[A-Za-z_$][A-Za-z0-9_$]*/g
-  let m: RegExpExecArray | null
-  let count = 0
-  while ((m = re.exec(text)) && count < 5000) { set.add(m[0]); count++ }
-  return Array.from(set)
-}
+const fareideEditorTheme = EditorView.theme({
+  '&': { backgroundColor: 'transparent', color: '#dde1ee', height: '100%', fontSize: '13.5px' },
+  '.cm-content': { fontFamily: "'JetBrains Mono', monospace", caretColor: '#c4b9ff', padding: '16px 0' },
+  '.cm-line': { padding: '0 16px' },
+  '.cm-scroller': { fontFamily: "'JetBrains Mono', monospace", lineHeight: '22px' },
+  '.cm-gutters': { backgroundColor: '#09090d', color: '#3e4256', border: 'none', borderRight: '1px solid #1e1e28' },
+  '.cm-gutterElement': { padding: '0 12px 0 16px' },
+  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: '#9ca0b0' },
+  '.cm-activeLine': { backgroundColor: '#ffffff05' },
+  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { backgroundColor: '#7c6af740 !important' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#c4b9ff' },
+  '.cm-matchingBracket, .cm-nonmatchingBracket': { backgroundColor: '#7c6af730', outline: '1px solid #7c6af760' },
+  '.cm-tooltip': { backgroundColor: '#14141c', border: '1px solid #2a2a38', borderRadius: '8px', overflow: 'hidden' },
+  '.cm-tooltip-autocomplete ul li[aria-selected]': { backgroundColor: '#7c6af730', color: '#c4b9ff' },
+  '.cm-tooltip-autocomplete ul li': { padding: '3px 10px' },
+  '.cm-foldPlaceholder': { backgroundColor: '#1e1e28', border: 'none', color: '#9ca0b0' },
+}, { dark: true })
 
-// Snippet bodies use '|' to mark the cursor landing spot — split it out before inserting.
-function splitSnippet(body: string): [string, number] {
-  const idx = body.indexOf('|')
-  if (idx === -1) return [body, body.length]
-  return [body.slice(0, idx) + body.slice(idx + 1), idx]
-}
+const fareideHighlightStyle = HighlightStyle.define([
+  { tag: t.comment, color: '#4a5068', fontStyle: 'italic' },
+  { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.operatorKeyword], color: '#c792ea' },
+  { tag: [t.string, t.special(t.string), t.regexp], color: '#c3e88d' },
+  { tag: [t.number, t.bool, t.null, t.atom], color: '#f78c6c' },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: '#82aaff' },
+  { tag: [t.className, t.typeName], color: '#ffcb6b' },
+  { tag: [t.operator, t.punctuation, t.angleBracket], color: '#89ddff' },
+  { tag: t.propertyName, color: '#82aaff' },
+  { tag: t.attributeName, color: '#ffcb6b' },
+  { tag: t.attributeValue, color: '#c3e88d' },
+  { tag: t.tagName, color: '#f07178' },
+  { tag: t.variableName, color: '#dde1ee' },
+  { tag: t.meta, color: '#f07178' },
+  { tag: t.invalid, color: '#ff5f57' },
+])
 
-function caretPixelPos(ta: HTMLTextAreaElement, value: string, pos: number) {
-  const before = value.slice(0, pos)
-  const lineIdx = before.split('\n').length - 1
-  const col = pos - before.lastIndexOf('\n') - 1
-  const charW = getMonoCharWidth()
-  return {
-    top: 16 + lineIdx * 22 + 22 - ta.scrollTop,
-    left: 16 + col * charW - ta.scrollLeft,
+const fareideTheme: Extension[] = [fareideEditorTheme, syntaxHighlighting(fareideHighlightStyle)]
+
+// ── Structural snippets (Tab-triggered, multi-tabstop via CodeMirror's own engine) ──
+
+const htmlSnippets = [
+  snippetCompletion(
+    '<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>${Document}</title>\n</head>\n<body>\n  ${}\n</body>\n</html>',
+    { label: '!', detail: 'HTML5 boilerplate', type: 'keyword' },
+  ),
+  snippetCompletion(
+    '<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>${Document}</title>\n</head>\n<body>\n  ${}\n</body>\n</html>',
+    { label: 'doctype', detail: 'HTML5 boilerplate', type: 'keyword' },
+  ),
+]
+
+const pySnippets = [
+  snippetCompletion('def ${name}(${params}):\n    ${}', { label: 'def', detail: 'function', type: 'keyword' }),
+  snippetCompletion('class ${Name}:\n    def __init__(self${, params}):\n        ${}', { label: 'class', detail: 'class', type: 'keyword' }),
+  snippetCompletion('for ${i} in range(${n}):\n    ${}', { label: 'for', detail: 'loop', type: 'keyword' }),
+  snippetCompletion('if ${condition}:\n    ${}', { label: 'if', detail: 'conditional', type: 'keyword' }),
+  snippetCompletion('try:\n    ${}\nexcept ${Exception} as e:\n    ${}', { label: 'try', detail: 'try/except', type: 'keyword' }),
+]
+
+const jsSnippets = [
+  snippetCompletion('function ${name}(${params}) {\n  ${}\n}', { label: 'function', detail: 'function', type: 'keyword' }),
+  snippetCompletion('class ${Name} {\n  constructor(${params}) {\n    ${}\n  }\n}', { label: 'class', detail: 'class', type: 'keyword' }),
+  snippetCompletion('for (let ${i} = 0; ${i} < ${n}; ${i}++) {\n  ${}\n}', { label: 'for', detail: 'loop', type: 'keyword' }),
+  snippetCompletion('if (${condition}) {\n  ${}\n}', { label: 'if', detail: 'conditional', type: 'keyword' }),
+]
+
+const phpSnippets = [
+  snippetCompletion('function ${name}(${params}) {\n    ${}\n}', { label: 'function', detail: 'function', type: 'keyword' }),
+  snippetCompletion('if (${condition}) {\n    ${}\n}', { label: 'if', detail: 'conditional', type: 'keyword' }),
+  snippetCompletion('foreach (${$arr} as ${$value}) {\n    ${}\n}', { label: 'foreach', detail: 'loop', type: 'keyword' }),
+]
+
+// ── Language + snippet resolution per file path ────────────────────────────────
+
+function getEditorExtensions(path: string): Extension[] {
+  const lang = getLang(path)
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  const base: Extension[] = [keymap.of([indentWithTab])]
+
+  switch (lang) {
+    case 'html':
+      return [...base, html({ autoCloseTags: true, matchClosingTags: true }), htmlLanguage.data.of({ autocomplete: completeFromList(htmlSnippets) })]
+    case 'css':
+      return [...base, css()]
+    case 'javascript':
+      return [...base, javascript({ jsx: ext === 'jsx' }), javascriptLanguage.data.of({ autocomplete: completeFromList(jsSnippets) })]
+    case 'typescript':
+      return [...base, javascript({ jsx: ext === 'tsx', typescript: true }), javascriptLanguage.data.of({ autocomplete: completeFromList(jsSnippets) })]
+    case 'python':
+      return [...base, python(), pythonLanguage.data.of({ autocomplete: completeFromList(pySnippets) })]
+    case 'php':
+      return [...base, php(), phpLanguage.data.of({ autocomplete: completeFromList(phpSnippets) })]
+    case 'json':
+      return [...base, json()]
+    case 'markdown':
+      return [...base, markdown()]
+    case 'xml':
+      return [...base, xml()]
+    case 'cpp':
+      return [...base, cpp()]
+    case 'java':
+      return [...base, java()]
+    case 'rust':
+      return [...base, rust()]
+    case 'sql':
+      return [...base, sql()]
+    case 'yaml':
+      return [...base, yaml()]
+    case 'bash':
+      return [...base, StreamLanguage.define(shell)]
+    case 'go':
+      return [...base, StreamLanguage.define(goMode)]
+    default:
+      return base
   }
 }
-
-interface SuggestItem { label: string; insertText: string; caretOffset: number; isSnippet?: boolean }
-interface SuggestState { items: SuggestItem[]; index: number; top: number; left: number; wordStart: number }
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type FileSystem = Record<string, string>
@@ -201,300 +296,22 @@ function TreeItem({
 function CodeEditor({ content, onChange, path }: {
   content: string; onChange: (v: string) => void; path: string
 }) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const preRef = useRef<HTMLPreElement>(null)
-  const lineNumRef = useRef<HTMLDivElement>(null)
-  const [suggest, setSuggest] = useState<SuggestState | null>(null)
-  const lines = content.split('\n')
-
-  const syncScroll = useCallback(() => {
-    if (!textareaRef.current || !preRef.current) return
-    preRef.current.scrollTop = textareaRef.current.scrollTop
-    preRef.current.scrollLeft = textareaRef.current.scrollLeft
-    if (lineNumRef.current) lineNumRef.current.scrollTop = textareaRef.current.scrollTop
-  }, [])
-
-  useLayoutEffect(() => { syncScroll() }, [content, syncScroll])
-
-  // Reset any open suggestion dropdown whenever the active file changes
-  useEffect(() => { setSuggest(null) }, [path])
-
-  const updateSuggestions = useCallback((ta: HTMLTextAreaElement, value: string, pos: number) => {
-    const lang = getLang(path)
-
-    // Special case: typing "<!DOCTYPE" (or bare "!") in an HTML file offers the full skeleton
-    if (lang === 'html') {
-      const lineStart = value.lastIndexOf('\n', pos - 1) + 1
-      const beforeCursor = value.slice(lineStart, pos)
-      const docMatch = beforeCursor.match(/<!DOCTYPE\w*$/i)
-      const bangMatch = beforeCursor.trim() === '!' ? '!' : null
-      if (docMatch || bangMatch) {
-        const trigger = docMatch ? docMatch[0] : '!'
-        const wordStart = lineStart + beforeCursor.lastIndexOf(trigger)
-        const [insertText, caretOffset] = splitSnippet(getHtml5Boilerplate())
-        const { top, left } = caretPixelPos(ta, value, pos)
-        setSuggest({
-          items: [{ label: '<!DOCTYPE html> \u2192 full HTML5 skeleton', insertText, caretOffset, isSnippet: true }],
-          index: 0, top, left, wordStart,
-        })
-        return
-      }
-    }
-
-    let start = pos
-    while (start > 0 && /[A-Za-z0-9_$]/.test(value[start - 1])) start--
-    const word = value.slice(start, pos)
-    if (word.length < 2) { setSuggest(null); return }
-    const lower = word.toLowerCase()
-
-    const snippetItems: SuggestItem[] = getSnippets(lang)
-      .filter((s) => s.trigger !== word && s.trigger.startsWith(lower))
-      .map((s) => {
-        const [insertText, caretOffset] = splitSnippet(s.body)
-        return { label: s.label, insertText, caretOffset, isSnippet: true }
-      })
-
-    const pool = Array.from(new Set([...getCompletionWords(lang), ...extractWords(value)]))
-    const wordItems: SuggestItem[] = pool
-      .filter((w) => w !== word && w.toLowerCase().startsWith(lower))
-      .sort((a, b) => a.length - b.length || a.localeCompare(b))
-      .slice(0, Math.max(0, 8 - snippetItems.length))
-      .map((w) => ({ label: w, insertText: w, caretOffset: w.length }))
-
-    const items = [...snippetItems, ...wordItems].slice(0, 8)
-    if (!items.length) { setSuggest(null); return }
-
-    const { top, left } = caretPixelPos(ta, value, pos)
-    setSuggest({ items, index: 0, top, left, wordStart: start })
-  }, [path])
-
-  const acceptSuggestion = useCallback((item: SuggestItem) => {
-    const ta = textareaRef.current
-    if (!ta || !suggest) return
-    const pos = ta.selectionEnd
-    const newVal = content.slice(0, suggest.wordStart) + item.insertText + content.slice(pos)
-    const newPos = suggest.wordStart + item.caretOffset
-    setSuggest(null)
-    onChange(newVal)
-    requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos; ta.focus() })
-  }, [suggest, content, onChange])
-
-  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value
-    onChange(value)
-    updateSuggestions(e.target, value, e.target.selectionStart)
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const ta = textareaRef.current!
-    const { selectionStart, selectionEnd, value } = ta
-
-    // ── Suggestion dropdown navigation takes priority ──────────────────────
-    if (suggest) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setSuggest((s) => s && { ...s, index: (s.index + 1) % s.items.length }); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setSuggest((s) => s && { ...s, index: (s.index - 1 + s.items.length) % s.items.length }); return }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptSuggestion(suggest.items[suggest.index]); return }
-      if (e.key === 'Escape') { e.preventDefault(); setSuggest(null); return }
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { setSuggest(null) }
-    }
-    // ── HTML: typing '>' auto-closes the tag, or expands a typed DOCTYPE ───
-    const lang = getLang(path)
-    if (e.key === '>' && (lang === 'html' || lang === 'xml') && selectionStart === selectionEnd) {
-      const lineStart = value.lastIndexOf('\n', selectionStart - 1) + 1
-      const beforeCursor = value.slice(lineStart, selectionStart)
-
-      if (/^<!DOCTYPE\s+html$/i.test(beforeCursor.trim())) {
-        e.preventDefault()
-        setSuggest(null)
-        const tagStart = lineStart + beforeCursor.indexOf('<')
-        const [boilerplate, caretIdx] = splitSnippet(getHtml5Boilerplate())
-        const newVal = value.slice(0, tagStart) + boilerplate + value.slice(selectionEnd)
-        const newPos = tagStart + caretIdx
-        onChange(newVal)
-        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos })
-        return
-      }
-
-      const lastLt = value.lastIndexOf('<', selectionStart - 1)
-      if (lastLt !== -1) {
-        const segment = value.slice(lastLt, selectionStart)
-        if (!segment.includes('>') && !segment.startsWith('</') && !segment.endsWith('/')) {
-          const tagMatch = segment.match(/^<([a-zA-Z][a-zA-Z0-9-]*)/)
-          if (tagMatch && !isVoidHtmlTag(tagMatch[1])) {
-            e.preventDefault()
-            setSuggest(null)
-            const closing = `</${tagMatch[1]}>`
-            const newVal = value.slice(0, selectionStart) + '>' + closing + value.slice(selectionEnd)
-            const newPos = selectionStart + 1
-            onChange(newVal)
-            requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos })
-            return
-          }
-        }
-      }
-    }
-
-    // ── Tab: insert 2-space indent ──────────────────────────────────────────
-    if (e.key === 'Tab') {
-      e.preventDefault()
-      const newVal = value.slice(0, selectionStart) + '  ' + value.slice(selectionEnd)
-      onChange(newVal)
-      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = selectionStart + 2 })
-      return
-    }
-
-    // ── Enter: auto-indent, matching VS Code-style behavior ────────────────
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      const lineStart = value.lastIndexOf('\n', selectionStart - 1) + 1
-      const currentLine = value.slice(lineStart, selectionStart)
-      const indent = currentLine.match(/^[ \t]*/)?.[0] ?? ''
-      const trimmed = currentLine.trimEnd()
-      const lastChar = trimmed.slice(-1)
-      const nextChar = value[selectionEnd] ?? ''
-      const isPython = getLang(path) === 'python'
-      const opensBlock = lastChar === '{' || lastChar === '[' || lastChar === '(' || (lastChar === ':' && isPython)
-      const closesImmediately = (lastChar === '{' && nextChar === '}') || (lastChar === '[' && nextChar === ']') || (lastChar === '(' && nextChar === ')')
-
-      if (closesImmediately) {
-        // Cursor is between an empty pair — expand into a 3-line block
-        const innerIndent = indent + '  '
-        const insertion = '\n' + innerIndent + '\n' + indent
-        const newVal = value.slice(0, selectionStart) + insertion + value.slice(selectionEnd)
-        const newPos = selectionStart + 1 + innerIndent.length
-        onChange(newVal)
-        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos })
-        return
-      }
-
-      const extra = opensBlock ? '  ' : ''
-      const insertion = '\n' + indent + extra
-      const newVal = value.slice(0, selectionStart) + insertion + value.slice(selectionEnd)
-      const newPos = selectionStart + insertion.length
-      onChange(newVal)
-      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos })
-      return
-    }
-
-    // ── Auto-closing brackets & quotes ──────────────────────────────────────
-    if (e.key in PAIR_CLOSERS) {
-      if (selectionStart !== selectionEnd) {
-        // Wrap the current selection in the pair
-        e.preventDefault()
-        const open = e.key
-        const close = PAIR_CLOSERS[e.key]
-        const selected = value.slice(selectionStart, selectionEnd)
-        const newVal = value.slice(0, selectionStart) + open + selected + close + value.slice(selectionEnd)
-        onChange(newVal)
-        requestAnimationFrame(() => { ta.selectionStart = selectionStart + 1; ta.selectionEnd = selectionEnd + 1 })
-        return
-      }
-      const prevChar = value[selectionStart - 1] ?? ''
-      const isQuote = e.key === '"' || e.key === "'" || e.key === '`'
-      // Don't auto-pair a quote mid/end of an existing word (e.g. typing an apostrophe in a contraction)
-      if (!(isQuote && /[A-Za-z0-9_]/.test(prevChar))) {
-        e.preventDefault()
-        const open = e.key
-        const close = PAIR_CLOSERS[e.key]
-        const newVal = value.slice(0, selectionStart) + open + close + value.slice(selectionEnd)
-        onChange(newVal)
-        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = selectionStart + 1 })
-        return
-      }
-    }
-
-    // ── Typing a closing char right before an identical one: skip over it ──
-    if (CLOSER_CHARS.has(e.key) && selectionStart === selectionEnd && value[selectionStart] === e.key) {
-      e.preventDefault()
-      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = selectionStart + 1 })
-      return
-    }
-
-    // ── Backspace deletes an empty pair together ────────────────────────────
-    if (e.key === 'Backspace' && selectionStart === selectionEnd && selectionStart > 0) {
-      const prev = value[selectionStart - 1]
-      const next = value[selectionStart]
-      if (PAIR_CLOSERS[prev] === next) {
-        e.preventDefault()
-        const newVal = value.slice(0, selectionStart - 1) + value.slice(selectionStart + 1)
-        onChange(newVal)
-        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = selectionStart - 1 })
-        return
-      }
-    }
-  }
-
-  const highlighted = highlightCode(content + '\n', path)
+  const extensions = useMemo(() => getEditorExtensions(path), [path])
 
   return (
-    <div className="flex h-full overflow-hidden" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '13.5px', lineHeight: '22px' }}>
-      {/* Line numbers */}
-      <div
-        ref={lineNumRef}
-        className="overflow-hidden shrink-0 select-none text-right pr-4 pl-4 pt-4 pb-4 text-[#3e4256] bg-[#09090d]"
-        style={{ minWidth: '52px' }}
-        aria-hidden
-      >
-        {lines.map((_, i) => <div key={i}>{i + 1}</div>)}
-        <div className="h-8" />
-      </div>
-      <div className="w-px bg-[#1e1e28] shrink-0" />
-      {/* Overlay container */}
-      <div className="relative flex-1 overflow-hidden">
-        {/* Highlighted pre (behind) */}
-        <pre
-          ref={preRef}
-          aria-hidden
-          className="absolute inset-0 overflow-hidden pointer-events-none p-4 m-0 hljs"
-          style={{ whiteSpace: 'pre', wordWrap: 'normal', background: 'transparent', fontSize: '13.5px', lineHeight: '22px', fontFamily: "'JetBrains Mono', monospace" }}
-          dangerouslySetInnerHTML={{ __html: highlighted }}
-        />
-        {/* Textarea (transparent, on top) */}
-        <textarea
-          ref={textareaRef}
-          value={content}
-          onChange={handleChange}
-          onScroll={() => { syncScroll(); if (suggest) setSuggest(null) }}
-          onKeyDown={handleKeyDown}
-          onClick={() => setSuggest(null)}
-          onBlur={() => setSuggest(null)}
-          spellCheck={false}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          className="absolute inset-0 w-full h-full resize-none outline-none p-4 overflow-auto"
-          style={{
-            background: 'transparent', color: 'transparent', caretColor: '#c4b9ff',
-            fontSize: '13.5px', lineHeight: '22px',
-            fontFamily: "'JetBrains Mono', monospace",
-            tabSize: 2, whiteSpace: 'pre', wordWrap: 'normal',
-          }}
-        />
-
-        {/* Autocomplete dropdown */}
-        {suggest && (
-          <div
-            className="absolute z-20 bg-[#14141c] border border-[#2a2a38] rounded-lg shadow-2xl py-1 text-[12px] min-w-[160px] max-w-[280px] max-h-[180px] overflow-y-auto scrollbar-thin"
-            style={{ top: suggest.top, left: suggest.left, fontFamily: "'JetBrains Mono', monospace" }}
-          >
-            {suggest.items.map((item, i) => (
-              <div
-                key={`${item.label}-${i}`}
-                onMouseDown={(e) => { e.preventDefault(); acceptSuggestion(item) }}
-                className={`px-3 py-1 cursor-pointer truncate flex items-center gap-1.5 ${
-                  i === suggest.index ? 'bg-[#7c6af730] text-[#c4b9ff]' : 'text-[#9ca0b0] hover:bg-[#ffffff08]'
-                }`}
-              >
-                {item.isSnippet && <span className="text-[#7c6af7] text-[10px] shrink-0">✦</span>}
-                <span className="truncate">{item.label}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+    <CodeMirror
+      value={content}
+      onChange={onChange}
+      theme={fareideTheme}
+      extensions={extensions}
+      height="100%"
+      basicSetup={{ tabSize: 2, highlightActiveLine: true, foldGutter: true }}
+      style={{ height: '100%' }}
+      className="h-full"
+    />
   )
 }
+
 
 // ── Context menu ───────────────────────────────────────────────────────────────
 
