@@ -1,0 +1,10 @@
+{
+  "description": "A browser-based code editor offering multi-tab editing, file upload/download, and folder-structured ZIP import for efficient local project management.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

@@ -1,0 +1,64 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+body { font-family: 'Inter', system-ui, sans-serif; background: #0a0a0e; color: #e2e4ea; overflow: hidden; }
+
+/* ── Syntax highlighting (custom dark theme) ─────────────────────────────── */
+.hljs { background: transparent; color: #dde1ee; }
+
+/* Comments */
+.hljs-comment, .hljs-quote { color: #4a5068; font-style: italic; }
+
+/* Keywords: if, for, def, class, import, return, etc. */
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-name, .hljs-tag { color: #c792ea; }
+
+/* Strings */
+.hljs-string, .hljs-attr, .hljs-symbol, .hljs-bullet, .hljs-addition { color: #c3e88d; }
+
+/* Numbers, booleans, constants */
+.hljs-number, .hljs-literal, .hljs-variable, .hljs-template-variable { color: #f78c6c; }
+
+/* Functions, methods */
+.hljs-title, .hljs-section, .hljs-attribute { color: #82aaff; }
+
+/* Types, classes */
+.hljs-type, .hljs-class .hljs-title, .hljs-params { color: #ffcb6b; }
+
+/* Operators, punctuation */
+.hljs-operator { color: #89ddff; }
+
+/* Decorators, meta */
+.hljs-meta, .hljs-meta .hljs-string { color: #f07178; }
+
+/* CSS selectors, properties */
+.hljs-selector-class, .hljs-selector-id, .hljs-selector-attr, .hljs-selector-pseudo { color: #ffcb6b; }
+.hljs-property { color: #82aaff; }
+
+/* HTML tags and attributes */
+.hljs-tag .hljs-name { color: #f07178; }
+.hljs-tag .hljs-attr { color: #ffcb6b; }
+
+/* PHP specific */
+.hljs-variable { color: #f78c6c; }
+
+/* Deletion */
+.hljs-deletion { color: #f07178; }
+
+/* ── Scrollbars ───────────────────────────────────────────────────────────── */
+.scrollbar-thin::-webkit-scrollbar { width: 4px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 2px; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #3e4256; }
+
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { scrollbar-width: none; }
+
+textarea::-webkit-scrollbar { width: 6px; height: 6px; }
+textarea::-webkit-scrollbar-track { background: transparent; }
+textarea::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 3px; }
+textarea::-webkit-scrollbar-thumb:hover { background: #3e4256; }
+
+::selection { background: #7c6af740; color: #e2e4ea; }
