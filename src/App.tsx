@@ -401,7 +401,7 @@ function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear
           </button>
         </div>
       </div>
-      <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px', lineHeight: '18px' }}>
+      <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin select-text" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px', lineHeight: '18px' }}>
         {lines.length === 0 ? (
           <p className="text-[var(--text-dim)]">No output yet. Open a .py file and click Run.</p>
         ) : (
@@ -506,11 +506,15 @@ export default function App() {
     setShowTerminal(true)
     setRunning(true)
     appendTerm('info', `$ python ${activeTab.split('/').pop()}\n`)
+    const stdinBuffer = getStdinBuffer()
+    if (!stdinBuffer) {
+      appendTerm('info', 'Note: this page is not cross-origin isolated, so input() will fail if the script calls it.\n')
+    }
     getWorker().postMessage({
       type: 'run',
       code: fs[activeTab] ?? '',
       filename: activeTab.split('/').pop() ?? activeTab,
-      stdinBuffer: getStdinBuffer(),
+      stdinBuffer,
     })
   }, [activeTab, running, fs, getWorker, getStdinBuffer, appendTerm])
 

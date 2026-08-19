@@ -64,6 +64,8 @@ self.onmessage = async (e: MessageEvent<WorkerInMsg>) => {
   const msg = e.data
   if (msg.type !== 'run') return
 
+  const noStdinAvailable = !msg.stdinBuffer
+
   try {
     const py = await ensurePyodide()
     py.setStdin({ stdin: makeStdinHandler(msg.stdinBuffer) })
@@ -79,8 +81,12 @@ self.onmessage = async (e: MessageEvent<WorkerInMsg>) => {
       const sysExit = text.match(/SystemExit:\s*(-?\d+)?/)
       if (sysExit) {
         post({ type: 'done', exitCode: sysExit[1] ? parseInt(sysExit[1], 10) : 0 })
-      } else if (/cross-origin isolated/i.test(text)) {
-        post({ type: 'stderr', data: 'input() requires this page to be cross-origin isolated (SharedArrayBuffer unavailable here).\n' })
+      } else if (noStdinAvailable && /(OSError|EOFError|I\/O error|Errno 29)/i.test(text)) {
+        // Pyodide's C-level stdio layer wraps whatever our stdin() callback
+        // throws into a generic OSError — the original message doesn't
+        // survive, so we lean on the fact we already knew: no SharedArrayBuffer
+        // was handed to this run, so any I/O failure here is that.
+        post({ type: 'stderr', data: 'input() failed: this page is not cross-origin isolated, so interactive input is unavailable in this environment.\n' })
         post({ type: 'done', exitCode: 1 })
       } else {
         post({ type: 'stderr', data: formatPyError(err) })
