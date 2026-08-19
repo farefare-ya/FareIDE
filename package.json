@@ -33,6 +33,7 @@
     "@uiw/react-codemirror": "^4.25.11",
     "codemirror": "^6.0.2",
     "jszip": "^3.10.1",
+    "pyodide": "^314.0.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

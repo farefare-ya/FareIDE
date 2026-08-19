@@ -16,6 +16,12 @@ export default defineConfig(({ mode }) => {
       sourcemap: emitSourcemaps ? 'inline' : false,
       minify: !emitSourcemaps,
     },
+    optimizeDeps: {
+      exclude: ['pyodide'],
+    },
+    worker: {
+      format: 'es',
+    },
     plugins: [
       react(),
       tailwindcss(),
