@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import JSZip from 'jszip'
 import { getLang, getLangLabel } from './syntax'
+import type { WorkerOutMsg } from './pyodide-protocol'
+import { STDIN_BUFFER_BYTES, STDIN_MAX_BYTES } from './pyodide-protocol'
 
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorView, keymap } from '@codemirror/view'
@@ -344,6 +346,94 @@ function CodeEditor({ content, onChange, path, isDark }: {
   )
 }
 
+// ── Terminal panel ───────────────────────────────────────────────────────────
+
+function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear, onStop, onSubmitInput }: {
+  lines: { kind: 'stdout' | 'stderr' | 'info'; text: string }[]
+  status: 'idle' | 'loading' | 'ready'
+  running: boolean
+  awaitingInput: boolean
+  onClose: () => void
+  onClear: () => void
+  onStop: () => void
+  onSubmitInput: (text: string) => void
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [draft, setDraft] = useState('')
+
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+  }, [lines, awaitingInput])
+
+  useEffect(() => {
+    if (awaitingInput) inputRef.current?.focus()
+  }, [awaitingInput])
+
+  const statusLabel = running
+    ? (awaitingInput ? 'Waiting for input' : status === 'loading' ? 'Loading runtime…' : 'Running…')
+    : status === 'ready' ? 'Python ready' : 'Not loaded'
+
+  return (
+    <div className="h-56 shrink-0 flex flex-col border-t border-[var(--border)] bg-[var(--bg-app)]">
+      <div className="flex items-center justify-between h-8 px-3 border-b border-[var(--border)] bg-[var(--bg-panel)] shrink-0">
+        <div className="flex items-center gap-2 text-[11px] font-medium text-[var(--text-secondary)]">
+          <span>Terminal</span>
+          <span className={`flex items-center gap-1 ${awaitingInput ? 'text-[var(--warning)]' : running ? 'text-[var(--accent-soft)]' : 'text-[var(--text-dim)]'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${awaitingInput ? 'bg-[var(--warning)] animate-pulse' : running ? 'bg-[var(--accent)] animate-pulse' : status === 'ready' ? 'bg-[var(--success)]' : 'bg-[var(--text-dim)]'}`} />
+            {statusLabel}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          {running && (
+            <button onClick={onStop} title="Stop"
+              className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--danger)] hover:bg-[var(--danger-wash)] transition-colors">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect x="1" y="1" width="8" height="8" rx="1"/></svg>
+            </button>
+          )}
+          <button onClick={onClear} title="Clear"
+            className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--accent-soft)] hover:bg-[var(--accent-wash)] transition-colors">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity="0"/><rect x="2" y="4" width="10" height="8" rx="1" stroke="currentColor" strokeWidth="1.2"/><path d="M2 4l1.2-2h7.6L12 4M6 6.5v3M8 6.5v3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
+          </button>
+          <button onClick={onClose} title="Close"
+            className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--overlay-hover)] transition-colors">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px', lineHeight: '18px' }}>
+        {lines.length === 0 ? (
+          <p className="text-[var(--text-dim)]">No output yet. Open a .py file and click Run.</p>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words m-0">
+            {lines.map((l, i) => (
+              <span key={i} className={
+                l.kind === 'stderr' ? 'text-[var(--danger)]' : l.kind === 'info' ? 'text-[var(--text-dim)] italic' : 'text-[var(--text-primary)]'
+              }>{l.text}</span>
+            ))}
+          </pre>
+        )}
+        {awaitingInput && (
+          <form
+            onSubmit={(e) => { e.preventDefault(); onSubmitInput(draft); setDraft('') }}
+            className="flex items-center gap-1 text-[var(--text-primary)]"
+          >
+            <span className="text-[var(--accent-soft)]">{'>'}</span>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              autoFocus
+              spellCheck={false}
+              className="flex-1 bg-transparent outline-none border-none"
+              style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px' }}
+            />
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
 
 // ── Context menu ───────────────────────────────────────────────────────────────
 
@@ -357,6 +447,98 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('')
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+
+  // ── Python execution (Pyodide, in a Worker) ──────────────────────────────
+  type TermLine = { kind: 'stdout' | 'stderr' | 'info'; text: string }
+  const [showTerminal, setShowTerminal] = useState(false)
+  const [termLines, setTermLines] = useState<TermLine[]>([])
+  const [pyStatus, setPyStatus] = useState<'idle' | 'loading' | 'ready'>('idle')
+  const [running, setRunning] = useState(false)
+  const [awaitingInput, setAwaitingInput] = useState(false)
+  const workerRef = useRef<Worker | null>(null)
+  const stdinBufferRef = useRef<SharedArrayBuffer | null>(null)
+
+  // SharedArrayBuffer only works when the page is cross-origin isolated (see
+  // vite.config.ts / public/_headers / vercel.json). If it isn't — e.g. a host
+  // that doesn't support custom headers — input() fails fast with a clear
+  // message instead of the app silently breaking.
+  const getStdinBuffer = useCallback((): SharedArrayBuffer | null => {
+    if (typeof SharedArrayBuffer === 'undefined' || !window.crossOriginIsolated) return null
+    if (!stdinBufferRef.current) stdinBufferRef.current = new SharedArrayBuffer(STDIN_BUFFER_BYTES)
+    return stdinBufferRef.current
+  }, [])
+
+  const appendTerm = useCallback((kind: TermLine['kind'], text: string) => {
+    setTermLines((prev) => [...prev, { kind, text }])
+  }, [])
+
+  const getWorker = useCallback(() => {
+    if (workerRef.current) return workerRef.current
+    const w = new Worker(new URL('./pyodide-worker.ts', import.meta.url), { type: 'module' })
+    w.onmessage = (e: MessageEvent<WorkerOutMsg>) => {
+      const msg = e.data
+      if (msg.type === 'status') {
+        setPyStatus(msg.status)
+        if (msg.status === 'loading') appendTerm('info', 'Loading Python runtime (Pyodide)…\n')
+      } else if (msg.type === 'stdout') {
+        appendTerm('stdout', msg.data)
+      } else if (msg.type === 'stderr') {
+        appendTerm('stderr', msg.data)
+      } else if (msg.type === 'input-request') {
+        setAwaitingInput(true)
+      } else if (msg.type === 'done') {
+        setRunning(false)
+        setAwaitingInput(false)
+        appendTerm('info', `\n[finished — exit code ${msg.exitCode}]\n`)
+      } else if (msg.type === 'fatal') {
+        setRunning(false)
+        setAwaitingInput(false)
+        setPyStatus('idle')
+        appendTerm('stderr', `Failed to load Python runtime: ${msg.message}\n`)
+      }
+    }
+    workerRef.current = w
+    return w
+  }, [appendTerm])
+
+  const runActiveFile = useCallback(() => {
+    if (!activeTab || getLang(activeTab) !== 'python' || running) return
+    setShowTerminal(true)
+    setRunning(true)
+    appendTerm('info', `$ python ${activeTab.split('/').pop()}\n`)
+    getWorker().postMessage({
+      type: 'run',
+      code: fs[activeTab] ?? '',
+      filename: activeTab.split('/').pop() ?? activeTab,
+      stdinBuffer: getStdinBuffer(),
+    })
+  }, [activeTab, running, fs, getWorker, getStdinBuffer, appendTerm])
+
+  const submitInput = useCallback((text: string) => {
+    const buf = stdinBufferRef.current
+    if (!buf) return
+    appendTerm('stdout', text + '\n')
+    const bytes = new TextEncoder().encode(text)
+    const len = Math.min(bytes.length, STDIN_MAX_BYTES)
+    new Uint8Array(buf, 8, len).set(bytes.subarray(0, len))
+    const control = new Int32Array(buf, 0, 2)
+    control[1] = len
+    Atomics.store(control, 0, 1)
+    Atomics.notify(control, 0)
+    setAwaitingInput(false)
+  }, [appendTerm])
+
+  const stopRun = useCallback(() => {
+    workerRef.current?.terminate()
+    workerRef.current = null
+    stdinBufferRef.current = null
+    setRunning(false)
+    setAwaitingInput(false)
+    setPyStatus('idle')
+    appendTerm('info', '\n[stopped]\n')
+  }, [appendTerm])
+
+  useEffect(() => () => { workerRef.current?.terminate() }, [])
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
   const [modal, setModal] = useState<{ type: 'newFile' | 'newFolder' | 'rename'; path?: string } | null>(null)
   const [modalInput, setModalInput] = useState('')
@@ -501,6 +683,32 @@ export default function App() {
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" fill="currentColor"/><path d="M8 1.5v1.6M8 12.9v1.6M14.5 8h-1.6M3.1 8H1.5M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1M12.5 12.5l-1.1-1.1M4.6 4.6L3.5 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
             )}
           </button>
+          <button onClick={running ? stopRun : runActiveFile}
+            disabled={!running && (!activeTab || getLang(activeTab) !== 'python')}
+            title={!activeTab || getLang(activeTab) !== 'python' ? 'Open a .py file to run' : running ? 'Stop' : 'Run'}
+            className={`flex items-center gap-1.5 px-3 py-1 text-[12px] rounded border transition-colors disabled:opacity-30 ${
+              running
+                ? 'bg-[var(--danger-wash)] text-[var(--danger)] border-[var(--danger)] hover:bg-[var(--danger)] hover:text-white'
+                : 'bg-[var(--bg-control)] text-[var(--text-secondary)] border-[var(--border-soft)] hover:bg-[var(--accent-wash)] hover:text-[var(--accent-soft)]'
+            }`}>
+            {running ? (
+              <>
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect x="1" y="1" width="8" height="8" rx="1"/></svg>
+                Stop
+              </>
+            ) : (
+              <>
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 1.3v7.4a.6.6 0 00.92.5l6-3.7a.6.6 0 000-1L2.92.8A.6.6 0 002 1.3z"/></svg>
+                Run
+              </>
+            )}
+          </button>
+          <button title="Terminal" onClick={() => setShowTerminal((s) => !s)}
+            className={`w-7 h-7 flex items-center justify-center rounded border transition-colors ${
+              showTerminal ? 'bg-[var(--accent-wash)] text-[var(--accent-soft)] border-[var(--accent-select)]' : 'bg-[var(--bg-control)] text-[var(--text-secondary)] border-[var(--border-soft)] hover:text-[var(--accent-soft)] hover:bg-[var(--accent-wash)]'
+            }`}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><path d="M4 6.5l2.5 2-2.5 2M8 10.5h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </button>
           <button onClick={() => { if (activeTab && activeTab in fs) { downloadFile(activeTab.split('/').pop()!, fs[activeTab]); flash('Downloaded') } }}
             disabled={!activeTab}
             className="flex items-center gap-1.5 px-3 py-1 text-[12px] rounded bg-[var(--bg-control)] hover:bg-[var(--accent-wash)] hover:text-[var(--accent-soft)] border border-[var(--border-soft)] transition-colors disabled:opacity-30 text-[var(--text-secondary)]">
@@ -587,30 +795,46 @@ export default function App() {
             })}
           </div>
 
-          {/* Editor */}
-          {activeTab && activeTab in fs ? (
-            <div className="flex-1 min-h-0 overflow-hidden select-text">
-              <CodeEditor key={activeTab} path={activeTab} content={activeContent} onChange={(v) => updateContent(activeTab, v)} isDark={theme === 'dark'} />
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center gap-4">
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none" opacity={0.08}><rect x="4" y="4" width="40" height="40" rx="6" stroke="var(--text-primary)" strokeWidth="2"/><path d="M16 18l-6 6 6 6M32 18l6 6-6 6M28 14l-8 20" stroke="var(--text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              <div className="text-center">
-                <p className="text-[18px] font-semibold text-[var(--border-soft)]">FareIDE</p>
-                <p className="text-[12px] text-[var(--text-dim)] mt-1">Open a file from the explorer or create a new one</p>
+          {/* Editor + Terminal */}
+          <div className="flex-1 min-h-0 flex flex-col">
+            {activeTab && activeTab in fs ? (
+              <div className="flex-1 min-h-0 overflow-hidden select-text">
+                <CodeEditor key={activeTab} path={activeTab} content={activeContent} onChange={(v) => updateContent(activeTab, v)} isDark={theme === 'dark'} />
               </div>
-              <div className="flex gap-2 mt-2">
-                <button onClick={() => { setModal({ type: 'newFile' }); setModalInput('') }}
-                  className="px-4 py-2 text-[12px] rounded-lg bg-[var(--accent-wash)] text-[var(--accent-soft)] border border-[var(--accent-select)] hover:bg-[var(--accent-active)] transition-colors">
-                  New File
-                </button>
-                <button onClick={() => fileInputRef.current?.click()}
-                  className="px-4 py-2 text-[12px] rounded-lg bg-[var(--bg-control)] text-[var(--text-secondary)] border border-[var(--border-soft)] hover:text-[var(--accent-soft)] hover:bg-[var(--accent-wash)] transition-colors">
-                  Upload File
-                </button>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center gap-4">
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" opacity={0.08}><rect x="4" y="4" width="40" height="40" rx="6" stroke="var(--text-primary)" strokeWidth="2"/><path d="M16 18l-6 6 6 6M32 18l6 6-6 6M28 14l-8 20" stroke="var(--text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <div className="text-center">
+                  <p className="text-[18px] font-semibold text-[var(--border-soft)]">FareIDE</p>
+                  <p className="text-[12px] text-[var(--text-dim)] mt-1">Open a file from the explorer or create a new one</p>
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => { setModal({ type: 'newFile' }); setModalInput('') }}
+                    className="px-4 py-2 text-[12px] rounded-lg bg-[var(--accent-wash)] text-[var(--accent-soft)] border border-[var(--accent-select)] hover:bg-[var(--accent-active)] transition-colors">
+                    New File
+                  </button>
+                  <button onClick={() => fileInputRef.current?.click()}
+                    className="px-4 py-2 text-[12px] rounded-lg bg-[var(--bg-control)] text-[var(--text-secondary)] border border-[var(--border-soft)] hover:text-[var(--accent-soft)] hover:bg-[var(--accent-wash)] transition-colors">
+                    Upload File
+                  </button>
               </div>
             </div>
           )}
+
+          {/* Terminal */}
+          {showTerminal && (
+            <TerminalPanel
+              lines={termLines}
+              status={pyStatus}
+              running={running}
+              awaitingInput={awaitingInput}
+              onClose={() => setShowTerminal(false)}
+              onClear={() => setTermLines([])}
+              onStop={stopRun}
+              onSubmitInput={submitInput}
+            />
+          )}
+          </div>
         </div>
       </div>
 

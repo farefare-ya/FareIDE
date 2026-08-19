@@ -1,0 +1,9 @@
+# Netlify / Cloudflare Pages header config.
+# Required for interactive Python input() to work: SharedArrayBuffer (and
+# the Atomics.wait blocking-read trick it enables) is only available in
+# browsers when the page is "cross-origin isolated" — these two headers.
+# GitHub Pages cannot set custom headers, so this feature won't work there;
+# Netlify, Cloudflare Pages, and Vercel (see vercel.json) all support it.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
