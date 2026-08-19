@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import JSZip from 'jszip'
 import { getLang, getLangLabel } from './syntax'
 import type { WorkerOutMsg } from './pyodide-protocol'
+import { STDIN_BUFFER_BYTES, STDIN_MAX_BYTES } from './pyodide-protocol'
 
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorView, keymap } from '@codemirror/view'
@@ -347,46 +348,54 @@ function CodeEditor({ content, onChange, path, isDark }: {
 
 // ── Terminal panel ───────────────────────────────────────────────────────────
 
-function TerminalPanel({ lines, status, running, onClose, onClear, onStop }: {
+function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear, onStop, onSubmitInput }: {
   lines: { kind: 'stdout' | 'stderr' | 'info'; text: string }[]
   status: 'idle' | 'loading' | 'ready'
   running: boolean
+  awaitingInput: boolean
   onClose: () => void
   onClear: () => void
   onStop: () => void
+  onSubmitInput: (text: string) => void
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [draft, setDraft] = useState('')
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
-  }, [lines])
+  }, [lines, awaitingInput])
+
+  useEffect(() => {
+    if (awaitingInput) inputRef.current?.focus()
+  }, [awaitingInput])
 
   const statusLabel = running
-    ? (status === 'loading' ? 'Memuat runtime…' : 'Berjalan…')
-    : status === 'ready' ? 'Python siap' : 'Belum dimuat'
+    ? (awaitingInput ? 'Waiting for input' : status === 'loading' ? 'Loading runtime…' : 'Running…')
+    : status === 'ready' ? 'Python ready' : 'Not loaded'
 
   return (
     <div className="h-56 shrink-0 flex flex-col border-t border-[var(--border)] bg-[var(--bg-app)]">
       <div className="flex items-center justify-between h-8 px-3 border-b border-[var(--border)] bg-[var(--bg-panel)] shrink-0">
         <div className="flex items-center gap-2 text-[11px] font-medium text-[var(--text-secondary)]">
           <span>Terminal</span>
-          <span className={`flex items-center gap-1 ${running ? 'text-[var(--accent-soft)]' : 'text-[var(--text-dim)]'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${running ? 'bg-[var(--accent)] animate-pulse' : status === 'ready' ? 'bg-[var(--success)]' : 'bg-[var(--text-dim)]'}`} />
+          <span className={`flex items-center gap-1 ${awaitingInput ? 'text-[var(--warning)]' : running ? 'text-[var(--accent-soft)]' : 'text-[var(--text-dim)]'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${awaitingInput ? 'bg-[var(--warning)] animate-pulse' : running ? 'bg-[var(--accent)] animate-pulse' : status === 'ready' ? 'bg-[var(--success)]' : 'bg-[var(--text-dim)]'}`} />
             {statusLabel}
           </span>
         </div>
         <div className="flex items-center gap-1">
           {running && (
-            <button onClick={onStop} title="Hentikan"
+            <button onClick={onStop} title="Stop"
               className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--danger)] hover:bg-[var(--danger-wash)] transition-colors">
               <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect x="1" y="1" width="8" height="8" rx="1"/></svg>
             </button>
           )}
-          <button onClick={onClear} title="Bersihkan"
+          <button onClick={onClear} title="Clear"
             className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--accent-soft)] hover:bg-[var(--accent-wash)] transition-colors">
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity="0"/><rect x="2" y="4" width="10" height="8" rx="1" stroke="currentColor" strokeWidth="1.2"/><path d="M2 4l1.2-2h7.6L12 4M6 6.5v3M8 6.5v3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
           </button>
-          <button onClick={onClose} title="Tutup"
+          <button onClick={onClose} title="Close"
             className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--overlay-hover)] transition-colors">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
           </button>
@@ -394,7 +403,7 @@ function TerminalPanel({ lines, status, running, onClose, onClear, onStop }: {
       </div>
       <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px', lineHeight: '18px' }}>
         {lines.length === 0 ? (
-          <p className="text-[var(--text-dim)]">Belum ada output. Buka file .py lalu klik Run.</p>
+          <p className="text-[var(--text-dim)]">No output yet. Open a .py file and click Run.</p>
         ) : (
           <pre className="whitespace-pre-wrap break-words m-0">
             {lines.map((l, i) => (
@@ -403,6 +412,23 @@ function TerminalPanel({ lines, status, running, onClose, onClear, onStop }: {
               }>{l.text}</span>
             ))}
           </pre>
+        )}
+        {awaitingInput && (
+          <form
+            onSubmit={(e) => { e.preventDefault(); onSubmitInput(draft); setDraft('') }}
+            className="flex items-center gap-1 text-[var(--text-primary)]"
+          >
+            <span className="text-[var(--accent-soft)]">{'>'}</span>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              autoFocus
+              spellCheck={false}
+              className="flex-1 bg-transparent outline-none border-none"
+              style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px' }}
+            />
+          </form>
         )}
       </div>
     </div>
@@ -428,7 +454,19 @@ export default function App() {
   const [termLines, setTermLines] = useState<TermLine[]>([])
   const [pyStatus, setPyStatus] = useState<'idle' | 'loading' | 'ready'>('idle')
   const [running, setRunning] = useState(false)
+  const [awaitingInput, setAwaitingInput] = useState(false)
   const workerRef = useRef<Worker | null>(null)
+  const stdinBufferRef = useRef<SharedArrayBuffer | null>(null)
+
+  // SharedArrayBuffer only works when the page is cross-origin isolated (see
+  // vite.config.ts / public/_headers / vercel.json). If it isn't — e.g. a host
+  // that doesn't support custom headers — input() fails fast with a clear
+  // message instead of the app silently breaking.
+  const getStdinBuffer = useCallback((): SharedArrayBuffer | null => {
+    if (typeof SharedArrayBuffer === 'undefined' || !window.crossOriginIsolated) return null
+    if (!stdinBufferRef.current) stdinBufferRef.current = new SharedArrayBuffer(STDIN_BUFFER_BYTES)
+    return stdinBufferRef.current
+  }, [])
 
   const appendTerm = useCallback((kind: TermLine['kind'], text: string) => {
     setTermLines((prev) => [...prev, { kind, text }])
@@ -441,18 +479,22 @@ export default function App() {
       const msg = e.data
       if (msg.type === 'status') {
         setPyStatus(msg.status)
-        if (msg.status === 'loading') appendTerm('info', 'Memuat Python runtime (Pyodide)…\n')
+        if (msg.status === 'loading') appendTerm('info', 'Loading Python runtime (Pyodide)…\n')
       } else if (msg.type === 'stdout') {
         appendTerm('stdout', msg.data)
       } else if (msg.type === 'stderr') {
         appendTerm('stderr', msg.data)
+      } else if (msg.type === 'input-request') {
+        setAwaitingInput(true)
       } else if (msg.type === 'done') {
         setRunning(false)
-        appendTerm('info', `\n[selesai — exit code ${msg.exitCode}]\n`)
+        setAwaitingInput(false)
+        appendTerm('info', `\n[finished — exit code ${msg.exitCode}]\n`)
       } else if (msg.type === 'fatal') {
         setRunning(false)
+        setAwaitingInput(false)
         setPyStatus('idle')
-        appendTerm('stderr', `Gagal memuat Python runtime: ${msg.message}\n`)
+        appendTerm('stderr', `Failed to load Python runtime: ${msg.message}\n`)
       }
     }
     workerRef.current = w
@@ -464,15 +506,36 @@ export default function App() {
     setShowTerminal(true)
     setRunning(true)
     appendTerm('info', `$ python ${activeTab.split('/').pop()}\n`)
-    getWorker().postMessage({ type: 'run', code: fs[activeTab] ?? '', filename: activeTab.split('/').pop() ?? activeTab })
-  }, [activeTab, running, fs, getWorker, appendTerm])
+    getWorker().postMessage({
+      type: 'run',
+      code: fs[activeTab] ?? '',
+      filename: activeTab.split('/').pop() ?? activeTab,
+      stdinBuffer: getStdinBuffer(),
+    })
+  }, [activeTab, running, fs, getWorker, getStdinBuffer, appendTerm])
+
+  const submitInput = useCallback((text: string) => {
+    const buf = stdinBufferRef.current
+    if (!buf) return
+    appendTerm('stdout', text + '\n')
+    const bytes = new TextEncoder().encode(text)
+    const len = Math.min(bytes.length, STDIN_MAX_BYTES)
+    new Uint8Array(buf, 8, len).set(bytes.subarray(0, len))
+    const control = new Int32Array(buf, 0, 2)
+    control[1] = len
+    Atomics.store(control, 0, 1)
+    Atomics.notify(control, 0)
+    setAwaitingInput(false)
+  }, [appendTerm])
 
   const stopRun = useCallback(() => {
     workerRef.current?.terminate()
     workerRef.current = null
+    stdinBufferRef.current = null
     setRunning(false)
+    setAwaitingInput(false)
     setPyStatus('idle')
-    appendTerm('info', '\n[dihentikan]\n')
+    appendTerm('info', '\n[stopped]\n')
   }, [appendTerm])
 
   useEffect(() => () => { workerRef.current?.terminate() }, [])
@@ -622,7 +685,7 @@ export default function App() {
           </button>
           <button onClick={running ? stopRun : runActiveFile}
             disabled={!running && (!activeTab || getLang(activeTab) !== 'python')}
-            title={!activeTab || getLang(activeTab) !== 'python' ? 'Buka file .py untuk menjalankan' : running ? 'Hentikan' : 'Jalankan'}
+            title={!activeTab || getLang(activeTab) !== 'python' ? 'Open a .py file to run' : running ? 'Stop' : 'Run'}
             className={`flex items-center gap-1.5 px-3 py-1 text-[12px] rounded border transition-colors disabled:opacity-30 ${
               running
                 ? 'bg-[var(--danger-wash)] text-[var(--danger)] border-[var(--danger)] hover:bg-[var(--danger)] hover:text-white'
@@ -764,9 +827,11 @@ export default function App() {
               lines={termLines}
               status={pyStatus}
               running={running}
+              awaitingInput={awaitingInput}
               onClose={() => setShowTerminal(false)}
               onClear={() => setTermLines([])}
               onStop={stopRun}
+              onSubmitInput={submitInput}
             />
           )}
           </div>
