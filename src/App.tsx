@@ -3,6 +3,9 @@ import JSZip from 'jszip'
 import { getLang, getLangLabel } from './syntax'
 import type { WorkerOutMsg } from './pyodide-protocol'
 import { STDIN_BUFFER_BYTES, STDIN_MAX_BYTES } from './pyodide-protocol'
+import { Terminal as XTerm } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
 
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorView, keymap } from '@codemirror/view'
@@ -348,7 +351,78 @@ function CodeEditor({ content, onChange, path, isDark }: {
 
 // ── Terminal panel ───────────────────────────────────────────────────────────
 
-function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear, onStop, onSubmitInput }: {
+const XTERM_THEME_DARK = {
+  background: '#0a0a0e', foreground: '#e2e4ea', cursor: '#c4b9ff', cursorAccent: '#0a0a0e',
+  selectionBackground: '#7c6af740',
+  black: '#1c1c28', red: '#ff5f57', green: '#28c840', yellow: '#febc2e',
+  blue: '#82aaff', magenta: '#c792ea', cyan: '#89ddff', white: '#e2e4ea',
+  brightBlack: '#4a5068', brightRed: '#ff5f57', brightGreen: '#28c840', brightYellow: '#febc2e',
+  brightBlue: '#82aaff', brightMagenta: '#c792ea', brightCyan: '#89ddff', brightWhite: '#ffffff',
+}
+const XTERM_THEME_LIGHT = {
+  background: '#f5f3fa', foreground: '#211f30', cursor: '#4a37c9', cursorAccent: '#f5f3fa',
+  selectionBackground: '#6d56e840',
+  black: '#211f30', red: '#d6433c', green: '#1f9c3a', yellow: '#b8791c',
+  blue: '#1e5fc2', magenta: '#7c3fd4', cyan: '#0f8a99', white: '#5d5a72',
+  brightBlack: '#918dab', brightRed: '#d6433c', brightGreen: '#1f9c3a', brightYellow: '#b8791c',
+  brightBlue: '#1e5fc2', brightMagenta: '#7c3fd4', brightCyan: '#0f8a99', brightWhite: '#211f30',
+}
+
+// The real OS shell — only available in the Electron desktop build, where
+// electron/preload.cjs exposes window.electronTerminal backed by a genuine
+// PTY (node-pty) in the main process. In the plain browser build this
+// component never mounts; TerminalPanel shows an explanatory message instead.
+function SystemTerminal({ isDark }: { isDark: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const termRef = useRef<XTerm | null>(null)
+
+  useEffect(() => {
+    if (!containerRef.current || !window.electronTerminal) return
+    const bridge = window.electronTerminal
+    const term = new XTerm({
+      fontFamily: "'JetBrains Mono', monospace",
+      fontSize: 12.5,
+      lineHeight: 1.3,
+      cursorBlink: true,
+      theme: isDark ? XTERM_THEME_DARK : XTERM_THEME_LIGHT,
+    })
+    const fit = new FitAddon()
+    term.loadAddon(fit)
+    term.open(containerRef.current)
+    fit.fit()
+    termRef.current = term
+
+    bridge.spawn(term.cols, term.rows)
+    const offData = bridge.onData((data) => term.write(data))
+    const offExit = bridge.onExit((code) => term.write(`\r\n[process exited with code ${code}]\r\n`))
+    const inputDisposable = term.onData((data) => bridge.write(data))
+
+    const resizeObserver = new ResizeObserver(() => {
+      fit.fit()
+      bridge.resize(term.cols, term.rows)
+    })
+    resizeObserver.observe(containerRef.current)
+
+    return () => {
+      resizeObserver.disconnect()
+      inputDisposable.dispose()
+      offData()
+      offExit()
+      term.dispose()
+      termRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = isDark ? XTERM_THEME_DARK : XTERM_THEME_LIGHT
+  }, [isDark])
+
+  return <div ref={containerRef} className="flex-1 min-h-0 px-2 py-1 select-text" />
+}
+
+type BottomTab = 'console' | 'terminal'
+
+function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear, onStop, onSubmitInput, tab, onTabChange, isDark }: {
   lines: { kind: 'stdout' | 'stderr' | 'info'; text: string }[]
   status: 'idle' | 'loading' | 'ready'
   running: boolean
@@ -357,10 +431,14 @@ function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear
   onClear: () => void
   onStop: () => void
   onSubmitInput: (text: string) => void
+  tab: BottomTab
+  onTabChange: (tab: BottomTab) => void
+  isDark: boolean
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [draft, setDraft] = useState('')
+  const isElectron = !!window.isElectron
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
@@ -375,62 +453,84 @@ function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear
     : status === 'ready' ? 'Python ready' : 'Not loaded'
 
   return (
-    <div className="h-56 shrink-0 flex flex-col border-t border-[var(--border)] bg-[var(--bg-app)]">
-      <div className="flex items-center justify-between h-8 px-3 border-b border-[var(--border)] bg-[var(--bg-panel)] shrink-0">
-        <div className="flex items-center gap-2 text-[11px] font-medium text-[var(--text-secondary)]">
-          <span>Terminal</span>
-          <span className={`flex items-center gap-1 ${awaitingInput ? 'text-[var(--warning)]' : running ? 'text-[var(--accent-soft)]' : 'text-[var(--text-dim)]'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${awaitingInput ? 'bg-[var(--warning)] animate-pulse' : running ? 'bg-[var(--accent)] animate-pulse' : status === 'ready' ? 'bg-[var(--success)]' : 'bg-[var(--text-dim)]'}`} />
-            {statusLabel}
-          </span>
+    <div className="h-64 shrink-0 flex flex-col border-t border-[var(--border)] bg-[var(--bg-app)]">
+      <div className="flex items-center justify-between h-8 px-2 border-b border-[var(--border)] bg-[var(--bg-panel)] shrink-0">
+        <div className="flex items-center gap-1 text-[11px] font-medium">
+          <button onClick={() => onTabChange('console')}
+            className={`px-2 py-1 rounded transition-colors ${tab === 'console' ? 'bg-[var(--accent-wash)] text-[var(--accent-soft)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>
+            Console
+          </button>
+          <button onClick={() => onTabChange('terminal')} title={isElectron ? undefined : 'Desktop app only'}
+            className={`px-2 py-1 rounded transition-colors ${tab === 'terminal' ? 'bg-[var(--accent-wash)] text-[var(--accent-soft)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>
+            Terminal
+          </button>
+          {tab === 'console' && (
+            <span className={`flex items-center gap-1 ml-2 ${awaitingInput ? 'text-[var(--warning)]' : running ? 'text-[var(--accent-soft)]' : 'text-[var(--text-dim)]'}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${awaitingInput ? 'bg-[var(--warning)] animate-pulse' : running ? 'bg-[var(--accent)] animate-pulse' : status === 'ready' ? 'bg-[var(--success)]' : 'bg-[var(--text-dim)]'}`} />
+              {statusLabel}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
-          {running && (
+          {tab === 'console' && running && (
             <button onClick={onStop} title="Stop"
               className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--danger)] hover:bg-[var(--danger-wash)] transition-colors">
               <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect x="1" y="1" width="8" height="8" rx="1"/></svg>
             </button>
           )}
-          <button onClick={onClear} title="Clear"
-            className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--accent-soft)] hover:bg-[var(--accent-wash)] transition-colors">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity="0"/><rect x="2" y="4" width="10" height="8" rx="1" stroke="currentColor" strokeWidth="1.2"/><path d="M2 4l1.2-2h7.6L12 4M6 6.5v3M8 6.5v3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
-          </button>
+          {tab === 'console' && (
+            <button onClick={onClear} title="Clear"
+              className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--accent-soft)] hover:bg-[var(--accent-wash)] transition-colors">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="2" y="4" width="10" height="8" rx="1" stroke="currentColor" strokeWidth="1.2"/><path d="M2 4l1.2-2h7.6L12 4M6 6.5v3M8 6.5v3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
+            </button>
+          )}
           <button onClick={onClose} title="Close"
             className="w-6 h-6 flex items-center justify-center rounded text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--overlay-hover)] transition-colors">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
           </button>
         </div>
       </div>
-      <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin select-text" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px', lineHeight: '18px' }}>
-        {lines.length === 0 ? (
-          <p className="text-[var(--text-dim)]">No output yet. Open a .py file and click Run.</p>
+
+      {tab === 'terminal' ? (
+        isElectron ? (
+          <SystemTerminal isDark={isDark} />
         ) : (
-          <pre className="whitespace-pre-wrap break-words m-0">
-            {lines.map((l, i) => (
-              <span key={i} className={
-                l.kind === 'stderr' ? 'text-[var(--danger)]' : l.kind === 'info' ? 'text-[var(--text-dim)] italic' : 'text-[var(--text-primary)]'
-              }>{l.text}</span>
-            ))}
-          </pre>
-        )}
-        {awaitingInput && (
-          <form
-            onSubmit={(e) => { e.preventDefault(); onSubmitInput(draft); setDraft('') }}
-            className="flex items-center gap-1 text-[var(--text-primary)]"
-          >
-            <span className="text-[var(--accent-soft)]">{'>'}</span>
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              autoFocus
-              spellCheck={false}
-              className="flex-1 bg-transparent outline-none border-none"
-              style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px' }}
-            />
-          </form>
-        )}
-      </div>
+          <div className="flex-1 flex items-center justify-center text-[12px] text-[var(--text-dim)] text-center px-6">
+            The real system terminal only runs in the FareIDE desktop app — it needs actual OS process access that a browser tab can't grant.
+          </div>
+        )
+      ) : (
+        <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin select-text" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px', lineHeight: '18px' }}>
+          {lines.length === 0 ? (
+            <p className="text-[var(--text-dim)]">No output yet. Open a .py file and click Run.</p>
+          ) : (
+            <pre className="whitespace-pre-wrap break-words m-0">
+              {lines.map((l, i) => (
+                <span key={i} className={
+                  l.kind === 'stderr' ? 'text-[var(--danger)]' : l.kind === 'info' ? 'text-[var(--text-dim)] italic' : 'text-[var(--text-primary)]'
+                }>{l.text}</span>
+              ))}
+            </pre>
+          )}
+          {awaitingInput && (
+            <form
+              onSubmit={(e) => { e.preventDefault(); onSubmitInput(draft); setDraft('') }}
+              className="flex items-center gap-1 text-[var(--text-primary)]"
+            >
+              <span className="text-[var(--accent-soft)]">{'>'}</span>
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                autoFocus
+                spellCheck={false}
+                className="flex-1 bg-transparent outline-none border-none"
+                style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px' }}
+              />
+            </form>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -451,6 +551,7 @@ export default function App() {
   // ── Python execution (Pyodide, in a Worker) ──────────────────────────────
   type TermLine = { kind: 'stdout' | 'stderr' | 'info'; text: string }
   const [showTerminal, setShowTerminal] = useState(false)
+  const [terminalTab, setTerminalTab] = useState<BottomTab>('console')
   const [termLines, setTermLines] = useState<TermLine[]>([])
   const [pyStatus, setPyStatus] = useState<'idle' | 'loading' | 'ready'>('idle')
   const [running, setRunning] = useState(false)
@@ -836,6 +937,9 @@ export default function App() {
               onClear={() => setTermLines([])}
               onStop={stopRun}
               onSubmitInput={submitInput}
+              tab={terminalTab}
+              onTabChange={setTerminalTab}
+              isDark={theme === 'dark'}
             />
           )}
           </div>
