@@ -21,6 +21,8 @@ const EXT_MAP: Record<string, string> = {
   md: 'markdown', mdx: 'markdown',
   yml: 'yaml', yaml: 'yaml',
   xml: 'xml', svg: 'xml',
+  rb: 'ruby', pl: 'perl', pm: 'perl', lua: 'lua', r: 'r',
+  ps1: 'powershell', swift: 'swift', toml: 'toml',
 }
 
 const LANG_LABELS: Record<string, string> = {
@@ -28,6 +30,8 @@ const LANG_LABELS: Record<string, string> = {
   typescript: 'TypeScript', php: 'PHP', json: 'JSON', bash: 'Shell',
   sql: 'SQL', rust: 'Rust', go: 'Go', java: 'Java', cpp: 'C++',
   markdown: 'Markdown', yaml: 'YAML', xml: 'XML',
+  ruby: 'Ruby', perl: 'Perl', lua: 'Lua', r: 'R',
+  powershell: 'PowerShell', swift: 'Swift', toml: 'TOML',
 }
 
 export function getLang(filename: string): string | null {

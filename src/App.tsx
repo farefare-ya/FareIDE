@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import JSZip from 'jszip'
 import { getLang, getLangLabel } from './syntax'
-import type { WorkerOutMsg } from './pyodide-protocol'
-import { STDIN_BUFFER_BYTES, STDIN_MAX_BYTES } from './pyodide-protocol'
+import { getRunLanguage, isRunnable, getRunnerLabel } from './languages'
+import { subscribeRunEvents, unsubscribeRunEvents, startRun, writeStdin as sendStdin, stopRun as stopRunProcess, previewHtml, type RunFile } from './runner'
 
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorView, keymap } from '@codemirror/view'
@@ -27,6 +27,13 @@ import { sql } from '@codemirror/lang-sql'
 import { yaml } from '@codemirror/lang-yaml'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { go as goMode } from '@codemirror/legacy-modes/mode/go'
+import { ruby as rubyMode } from '@codemirror/legacy-modes/mode/ruby'
+import { perl as perlMode } from '@codemirror/legacy-modes/mode/perl'
+import { lua as luaMode } from '@codemirror/legacy-modes/mode/lua'
+import { r as rMode } from '@codemirror/legacy-modes/mode/r'
+import { swift as swiftMode } from '@codemirror/legacy-modes/mode/swift'
+import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
+import { toml as tomlMode } from '@codemirror/legacy-modes/mode/toml'
 
 // ── CodeMirror theme — colors come from CSS variables so light/dark just work ──
 
@@ -172,6 +179,20 @@ function getEditorExtensions(path: string): Extension[] {
       return [...base, StreamLanguage.define(shell)]
     case 'go':
       return [...base, StreamLanguage.define(goMode)]
+    case 'ruby':
+      return [...base, StreamLanguage.define(rubyMode)]
+    case 'perl':
+      return [...base, StreamLanguage.define(perlMode)]
+    case 'lua':
+      return [...base, StreamLanguage.define(luaMode)]
+    case 'r':
+      return [...base, StreamLanguage.define(rMode)]
+    case 'swift':
+      return [...base, StreamLanguage.define(swiftMode)]
+    case 'powershell':
+      return [...base, StreamLanguage.define(powerShell)]
+    case 'toml':
+      return [...base, StreamLanguage.define(tomlMode)]
     default:
       return base
   }
@@ -269,6 +290,8 @@ function IconFile({ lang }: { lang: string | null }) {
     json: 'var(--text-secondary)', bash: '#10b981', sql: '#06b6d4',
     rust: '#f97316', go: '#06b6d4', java: '#ef4444',
     cpp: '#3b82f6', markdown: '#9ca3af', yaml: '#f59e0b', xml: '#f97316',
+    ruby: '#ef4444', perl: '#3b82f6', lua: '#3b82f6', r: '#3b82f6',
+    powershell: '#3b82f6', swift: '#f97316', toml: '#9ca3af',
   }
   const color = lang ? (colors[lang] ?? 'var(--text-secondary)') : 'var(--text-secondary)'
   return (
@@ -348,9 +371,8 @@ function CodeEditor({ content, onChange, path, isDark }: {
 
 // ── Terminal panel ───────────────────────────────────────────────────────────
 
-function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear, onStop, onSubmitInput }: {
+function TerminalPanel({ lines, running, awaitingInput, onClose, onClear, onStop, onSubmitInput }: {
   lines: { kind: 'stdout' | 'stderr' | 'info'; text: string }[]
-  status: 'idle' | 'loading' | 'ready'
   running: boolean
   awaitingInput: boolean
   onClose: () => void
@@ -371,8 +393,8 @@ function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear
   }, [awaitingInput])
 
   const statusLabel = running
-    ? (awaitingInput ? 'Waiting for input' : status === 'loading' ? 'Loading runtime…' : 'Running…')
-    : status === 'ready' ? 'Python ready' : 'Not loaded'
+    ? (awaitingInput ? 'Running — type to send input' : 'Running…')
+    : 'Idle'
 
   return (
     <div className="h-56 shrink-0 flex flex-col border-t border-[var(--border)] bg-[var(--bg-app)]">
@@ -380,7 +402,7 @@ function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear
         <div className="flex items-center gap-2 text-[11px] font-medium text-[var(--text-secondary)]">
           <span>Terminal</span>
           <span className={`flex items-center gap-1 ${awaitingInput ? 'text-[var(--warning)]' : running ? 'text-[var(--accent-soft)]' : 'text-[var(--text-dim)]'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${awaitingInput ? 'bg-[var(--warning)] animate-pulse' : running ? 'bg-[var(--accent)] animate-pulse' : status === 'ready' ? 'bg-[var(--success)]' : 'bg-[var(--text-dim)]'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${awaitingInput ? 'bg-[var(--warning)] animate-pulse' : running ? 'bg-[var(--accent)] animate-pulse' : 'bg-[var(--text-dim)]'}`} />
             {statusLabel}
           </span>
         </div>
@@ -401,9 +423,9 @@ function TerminalPanel({ lines, status, running, awaitingInput, onClose, onClear
           </button>
         </div>
       </div>
-      <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px', lineHeight: '18px' }}>
+      <div ref={bodyRef} className="flex-1 overflow-y-auto px-3 py-2 scrollbar-thin select-text" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '12.5px', lineHeight: '18px' }}>
         {lines.length === 0 ? (
-          <p className="text-[var(--text-dim)]">No output yet. Open a .py file and click Run.</p>
+          <p className="text-[var(--text-dim)]">No output yet. Open a runnable file and click Run.</p>
         ) : (
           <pre className="whitespace-pre-wrap break-words m-0">
             {lines.map((l, i) => (
@@ -448,97 +470,71 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
 
-  // ── Python execution (Pyodide, in a Worker) ──────────────────────────────
+  // ── Code execution — real system interpreters/compilers via Tauri ───────
+  // Every run writes the whole workspace to a temp dir on disk and shells
+  // out to whatever's installed (python3, node, gcc, javac, rustc, go...),
+  // exactly like a terminal or VS Code would. See src-tauri/src/main.rs.
   type TermLine = { kind: 'stdout' | 'stderr' | 'info'; text: string }
   const [showTerminal, setShowTerminal] = useState(false)
   const [termLines, setTermLines] = useState<TermLine[]>([])
-  const [pyStatus, setPyStatus] = useState<'idle' | 'loading' | 'ready'>('idle')
   const [running, setRunning] = useState(false)
   const [awaitingInput, setAwaitingInput] = useState(false)
-  const workerRef = useRef<Worker | null>(null)
-  const stdinBufferRef = useRef<SharedArrayBuffer | null>(null)
-
-  // SharedArrayBuffer only works when the page is cross-origin isolated (see
-  // vite.config.ts / public/_headers / vercel.json). If it isn't — e.g. a host
-  // that doesn't support custom headers — input() fails fast with a clear
-  // message instead of the app silently breaking.
-  const getStdinBuffer = useCallback((): SharedArrayBuffer | null => {
-    if (typeof SharedArrayBuffer === 'undefined' || !window.crossOriginIsolated) return null
-    if (!stdinBufferRef.current) stdinBufferRef.current = new SharedArrayBuffer(STDIN_BUFFER_BYTES)
-    return stdinBufferRef.current
-  }, [])
 
   const appendTerm = useCallback((kind: TermLine['kind'], text: string) => {
     setTermLines((prev) => [...prev, { kind, text }])
   }, [])
 
-  const getWorker = useCallback(() => {
-    if (workerRef.current) return workerRef.current
-    const w = new Worker(new URL('./pyodide-worker.ts', import.meta.url), { type: 'module' })
-    w.onmessage = (e: MessageEvent<WorkerOutMsg>) => {
-      const msg = e.data
-      if (msg.type === 'status') {
-        setPyStatus(msg.status)
-        if (msg.status === 'loading') appendTerm('info', 'Loading Python runtime (Pyodide)…\n')
-      } else if (msg.type === 'stdout') {
-        appendTerm('stdout', msg.data)
-      } else if (msg.type === 'stderr') {
-        appendTerm('stderr', msg.data)
-      } else if (msg.type === 'input-request') {
-        setAwaitingInput(true)
-      } else if (msg.type === 'done') {
-        setRunning(false)
-        setAwaitingInput(false)
-        appendTerm('info', `\n[finished — exit code ${msg.exitCode}]\n`)
-      } else if (msg.type === 'fatal') {
-        setRunning(false)
-        setAwaitingInput(false)
-        setPyStatus('idle')
-        appendTerm('stderr', `Failed to load Python runtime: ${msg.message}\n`)
-      }
-    }
-    workerRef.current = w
-    return w
-  }, [appendTerm])
+  // The whole workspace, not just the active file — multi-file projects
+  // (local imports, headers, sibling classes) need their neighbors on disk.
+  const workspaceFiles = useCallback((): RunFile[] =>
+    Object.entries(fs)
+      .filter(([p]) => !p.endsWith('/.keep'))
+      .map(([path, content]) => ({ path, content })),
+  [fs])
 
-  const runActiveFile = useCallback(() => {
-    if (!activeTab || getLang(activeTab) !== 'python' || running) return
+  const runActiveFile = useCallback(async () => {
+    if (!activeTab || running || !isRunnable(activeTab)) return
+    const language = getRunLanguage(activeTab)!
     setShowTerminal(true)
     setRunning(true)
-    appendTerm('info', `$ python ${activeTab.split('/').pop()}\n`)
-    getWorker().postMessage({
-      type: 'run',
-      code: fs[activeTab] ?? '',
-      filename: activeTab.split('/').pop() ?? activeTab,
-      stdinBuffer: getStdinBuffer(),
-    })
-  }, [activeTab, running, fs, getWorker, getStdinBuffer, appendTerm])
-
-  const submitInput = useCallback((text: string) => {
-    const buf = stdinBufferRef.current
-    if (!buf) return
-    appendTerm('stdout', text + '\n')
-    const bytes = new TextEncoder().encode(text)
-    const len = Math.min(bytes.length, STDIN_MAX_BYTES)
-    new Uint8Array(buf, 8, len).set(bytes.subarray(0, len))
-    const control = new Int32Array(buf, 0, 2)
-    control[1] = len
-    Atomics.store(control, 0, 1)
-    Atomics.notify(control, 0)
     setAwaitingInput(false)
+    appendTerm('info', `$ ${getRunnerLabel(activeTab)} ${activeTab.split('/').pop()}\n`)
+    try {
+      await subscribeRunEvents((ev) => {
+        if (ev.type === 'stdout') appendTerm('stdout', ev.data)
+        else if (ev.type === 'stderr') appendTerm('stderr', ev.data)
+        else if (ev.type === 'exit') {
+          setRunning(false)
+          setAwaitingInput(false)
+          appendTerm('info', `\n[finished — exit code ${ev.code ?? '?'}]\n`)
+        }
+      })
+      await startRun(language, activeTab, workspaceFiles())
+      setAwaitingInput(true) // a blocked-on-input() process gives no signal; just allow typing any time
+    } catch (err) {
+      setRunning(false)
+      setAwaitingInput(false)
+      appendTerm('stderr', `${err instanceof Error ? err.message : String(err)}\n`)
+    }
+  }, [activeTab, running, appendTerm, workspaceFiles])
+
+  // A real child process gives no "now waiting for input()" event the way
+  // the old Pyodide worker did — so the input box just stays available
+  // the whole time a program runs, and Enter pipes the line to its stdin,
+  // same as typing into a terminal.
+  const submitInput = useCallback((text: string) => {
+    appendTerm('stdout', text + '\n')
+    sendStdin(text).catch((err) => appendTerm('stderr', `${err instanceof Error ? err.message : String(err)}\n`))
   }, [appendTerm])
 
   const stopRun = useCallback(() => {
-    workerRef.current?.terminate()
-    workerRef.current = null
-    stdinBufferRef.current = null
+    stopRunProcess().catch(() => {})
     setRunning(false)
     setAwaitingInput(false)
-    setPyStatus('idle')
     appendTerm('info', '\n[stopped]\n')
   }, [appendTerm])
 
-  useEffect(() => () => { workerRef.current?.terminate() }, [])
+  useEffect(() => () => { unsubscribeRunEvents() }, [])
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
   const [modal, setModal] = useState<{ type: 'newFile' | 'newFolder' | 'rename'; path?: string } | null>(null)
   const [modalInput, setModalInput] = useState('')
@@ -547,6 +543,13 @@ export default function App() {
   const zipInputRef = useRef<HTMLInputElement>(null)
 
   const flash = (msg: string) => { setStatusMsg(msg); setTimeout(() => setStatusMsg(null), 2500) }
+
+  const openHtmlPreview = useCallback(() => {
+    if (!activeTab) return
+    previewHtml(activeTab, workspaceFiles())
+      .then(() => flash('Opened in browser'))
+      .catch((err) => flash(err instanceof Error ? err.message : String(err)))
+  }, [activeTab, workspaceFiles])
 
   const openFile = useCallback((path: string) => {
     setActiveTab(path)
@@ -684,8 +687,8 @@ export default function App() {
             )}
           </button>
           <button onClick={running ? stopRun : runActiveFile}
-            disabled={!running && (!activeTab || getLang(activeTab) !== 'python')}
-            title={!activeTab || getLang(activeTab) !== 'python' ? 'Open a .py file to run' : running ? 'Stop' : 'Run'}
+            disabled={!running && (!activeTab || !isRunnable(activeTab))}
+            title={!activeTab || !isRunnable(activeTab) ? 'Open a runnable file to run' : running ? 'Stop' : `Run with ${getRunnerLabel(activeTab)}`}
             className={`flex items-center gap-1.5 px-3 py-1 text-[12px] rounded border transition-colors disabled:opacity-30 ${
               running
                 ? 'bg-[var(--danger-wash)] text-[var(--danger)] border-[var(--danger)] hover:bg-[var(--danger)] hover:text-white'
@@ -703,6 +706,13 @@ export default function App() {
               </>
             )}
           </button>
+          {activeTab && getLang(activeTab) === 'html' && (
+            <button title="Open in Browser" onClick={openHtmlPreview}
+              className="flex items-center gap-1.5 px-3 py-1 text-[12px] rounded bg-[var(--bg-control)] hover:bg-[var(--accent-wash)] hover:text-[var(--accent-soft)] border border-[var(--border-soft)] transition-colors text-[var(--text-secondary)]">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/><path d="M1 6h10M6 1c1.5 1.5 1.5 8 0 10M6 1C4.5 2.5 4.5 9.5 6 11" stroke="currentColor" strokeWidth="1.1"/></svg>
+              Open in Browser
+            </button>
+          )}
           <button title="Terminal" onClick={() => setShowTerminal((s) => !s)}
             className={`w-7 h-7 flex items-center justify-center rounded border transition-colors ${
               showTerminal ? 'bg-[var(--accent-wash)] text-[var(--accent-soft)] border-[var(--accent-select)]' : 'bg-[var(--bg-control)] text-[var(--text-secondary)] border-[var(--border-soft)] hover:text-[var(--accent-soft)] hover:bg-[var(--accent-wash)]'
@@ -825,7 +835,6 @@ export default function App() {
           {showTerminal && (
             <TerminalPanel
               lines={termLines}
-              status={pyStatus}
               running={running}
               awaitingInput={awaitingInput}
               onClose={() => setShowTerminal(false)}
