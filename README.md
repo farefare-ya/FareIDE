@@ -1,106 +1,134 @@
-# FareIDE (Desktop)
+# FareIDE
 
-FareIDE sekarang adalah **aplikasi desktop asli** (Tauri), bukan web app. Tombol
-Run tidak lagi mensimulasikan Python di browser (Pyodide) — sekarang benar-benar
-memanggil compiler/interpreter yang sudah terpasang di komputermu, persis
-seperti cara kerja terminal atau VS Code.
+FareIDE adalah aplikasi desktop untuk menulis dan menjalankan kode, dibangun
+dengan Tauri, React, dan CodeMirror. Berbeda dari kebanyakan online IDE yang
+mensimulasikan bahasa pemrograman di dalam browser, FareIDE menjalankan kode
+secara langsung menggunakan compiler dan interpreter yang sudah terpasang di
+komputermu, persis seperti terminal atau editor kode pada umumnya.
 
-Bahasa yang bisa langsung di-**Run** saat ini: **Python, JavaScript,
-TypeScript, C, C++, Java, Rust, Go, PHP, Ruby, Bash, SQL (sqlite3), Perl, Lua,
-R.** File HTML punya tombol "Open in Browser" (bukan "Run", karena HTML bukan
-dieksekusi tapi ditampilkan). Bahasa lain (CSS/JSON/YAML/XML/Markdown/dll)
-tetap dapat syntax highlighting seperti biasa, hanya belum bisa dijalankan.
+## Preview
 
-## 1. Prasyarat
+![FareIDE Preview](src/review.jpg)
 
-### Wajib (untuk build aplikasinya sendiri)
+## Fitur
 
-| Tool | Kebutuhan | Cek dengan |
-|---|---|---|
-| Node.js | 18+ | `node --version` |
-| Rust | **1.77.2 atau lebih baru**, install lewat [rustup.rs](https://rustup.rs) — jangan pakai `apt install rustc`, biasanya kekunoan | `rustc --version` |
-| Tauri CLI | otomatis lewat `npm install` (ada di devDependencies) | `npx tauri --version` |
+- Editor kode dengan syntax highlighting untuk banyak bahasa pemrograman
+- Eksekusi kode nyata (bukan simulasi di browser) lewat compiler/interpreter sistem
+- Terminal output real-time dengan dukungan stdin interaktif
+- Mendukung proyek multi-file (import lokal, header, class terpisah, dll)
+- Tombol Open in Browser untuk preview file HTML
+- Berjalan sebagai aplikasi desktop native (Windows, macOS, Linux)
 
-### Dependensi sistem per OS (untuk build/run Tauri-nya)
+## Bahasa yang Didukung untuk Eksekusi
 
-- **Linux**: `webkit2gtk-4.1`, `libgtk-3-dev`, `librsvg2-dev`, `libayatana-appindicator3-dev`, `build-essential`, `curl`, `wget`, `file`. Lihat [daftar lengkap di sini](https://v2.tauri.app/start/prerequisites/#linux).
-- **macOS**: Xcode Command Line Tools (`xcode-select --install`).
-- **Windows**: [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) + WebView2 (biasanya sudah bawaan Windows 10/11).
-
-### Opsional (per bahasa yang mau kamu jalankan)
-
-Aplikasinya sendiri **tidak membundel compiler apa pun** — ukurannya bakal
-raksasa kalau semua compiler ikut dibundel. Install saja yang kamu butuhkan:
-
-| Bahasa | Yang perlu terpasang |
+| Bahasa | Toolchain yang Dibutuhkan |
 |---|---|
-| Python | `python3` |
-| JavaScript | `node` |
-| TypeScript | `node` (pakai `npx tsx`, auto-download saat pertama run) |
-| C | `gcc` |
-| C++ | `g++` |
-| Java | JDK (`javac` + `java`) |
-| Rust | `rustc` (otomatis ada kalau kamu sudah install Rust di atas) |
-| Go | `go` |
-| PHP | `php` |
-| Ruby | `ruby` |
-| Bash | `bash` (bawaan Linux/macOS; di Windows perlu Git Bash/WSL di PATH) |
-| SQL | `sqlite3` CLI |
-| Perl | `perl` |
-| Lua | `lua` |
-| R | `Rscript` |
+| Python | python3 |
+| JavaScript | node |
+| TypeScript | node (via npx tsx) |
+| C | gcc |
+| C++ | g++ |
+| Java | JDK (javac, java) |
+| Rust | rustc |
+| Go | go |
+| PHP | php |
+| Ruby | ruby |
+| Bash | bash |
+| SQL | sqlite3 |
+| Perl | perl |
+| Lua | lua |
+| R | Rscript |
 
-Kalau sebuah toolchain belum terpasang, tombol Run tetap jalan tapi terminal
-akan menampilkan pesan error yang jelas (bukan macet diam-diam).
+FareIDE tidak membundel compiler apa pun di dalam aplikasinya. Instal saja
+toolchain untuk bahasa yang ingin kamu jalankan; kalau belum terpasang,
+terminal akan menampilkan pesan error yang jelas, bukan macet diam-diam.
 
-## 2. Setup & jalankan
+## Prasyarat
+
+Untuk build dan menjalankan proyek ini dari source:
+
+| Tool | Versi | Cek dengan |
+|---|---|---|
+| Node.js | 18 atau lebih baru | `node --version` |
+| Rust | 1.77.2 atau lebih baru, via [rustup.rs](https://rustup.rs) | `rustc --version` |
+| Tauri CLI | otomatis terpasang lewat npm install | `npx tauri --version` |
+
+Dependensi sistem tambahan per platform (dibutuhkan Tauri untuk build):
+
+- Linux: `webkit2gtk-4.1`, `libgtk-3-dev`, `librsvg2-dev`,
+  `libayatana-appindicator3-dev`, `build-essential`. Detail lengkap di
+  [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/#linux).
+- macOS: Xcode Command Line Tools (`xcode-select --install`).
+- Windows: [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+  dan WebView2 (biasanya sudah bawaan Windows 10/11).
+
+## Instalasi
 
 ```bash
+git clone https://github.com/farefare-ya/FareIDE.git
+cd FareIDE
 npm install
+```
+
+## Menjalankan (Mode Development)
+
+```bash
 npm run tauri:dev
 ```
 
-Perintah kedua akan compile backend Rust-nya (lumayan lama di run pertama,
-tergantung kecepatan komputer, karena mengunduh & mengcompile semua dependency
-Tauri) lalu membuka aplikasinya sebagai window native.
+Compile pertama akan memakan waktu beberapa menit karena Cargo mengunduh dan
+mengcompile seluruh dependency Tauri. Setelah itu, hot reload berjalan cepat
+seperti biasa.
 
-## 3. Build installer
+## Build Installer
 
 ```bash
 npm run tauri:build
 ```
 
-Hasilnya ada di `src-tauri/target/release/bundle/` — `.deb`/`.AppImage`/`.rpm`
-di Linux, `.dmg`/`.app` di macOS, `.msi`/`.exe` (NSIS) di Windows. **Build
-cross-platform tidak bisa** — kamu harus build di masing-masing OS target
-(build di Linux → hasilnya untuk Linux saja, dst).
+Hasil build ada di `src-tauri/target/release/bundle/`:
 
-## 4. Cara kerja eksekusi kode (kalau penasaran)
+- Linux: `.deb`, `.AppImage`, `.rpm`
+- macOS: `.dmg`, `.app`
+- Windows: `.msi`, `.exe` (NSIS)
 
-Saat kamu klik Run:
+Build bersifat platform-spesifik; kamu perlu build di masing-masing OS target
+untuk menghasilkan installer OS tersebut.
 
-1. Seluruh file di workspace-mu (bukan cuma file aktif) ditulis ke folder
-   temp di disk, supaya proyek multi-file (import lokal, header, class lain)
-   ikut kebawa.
-2. Backend Rust membangun perintah shell yang sesuai bahasanya (mis. `gcc
-   main.c -o main.out && ./main.out`) dan menjalankannya.
-3. stdout/stderr di-stream real-time ke panel terminal di UI.
-4. Kotak input di terminal mengirim langsung ke stdin proses yang jalan —
-   berguna untuk `input()`, `Scanner`, `scanf`, dll.
-5. Tombol Stop membunuh seluruh process tree (bukan cuma shell wrapper-nya),
-   supaya proses yang di-fork (mis. `go run` yang compile lalu jalankan
-   binary terpisah) ikut mati.
-6. Hanya satu program yang bisa jalan dalam satu waktu (sesuai desain
-   tombol Run/Stop di UI).
+## Struktur Proyek
 
-## Keterbatasan yang perlu kamu tahu
+```
+src/
+  App.tsx        Komponen utama: file explorer, tab, editor, panel terminal
+  syntax.ts       Pemetaan ekstensi file ke bahasa CodeMirror
+  languages.ts    Pemetaan ekstensi file ke bahasa yang bisa dieksekusi
+  runner.ts       Jembatan frontend ke backend Tauri (invoke/listen)
+src-tauri/
+  src/lib.rs      Backend: menulis workspace ke temp dir, membangun dan
+                  menjalankan perintah shell sesuai bahasa, streaming output
+  tauri.conf.json Konfigurasi window, bundle, dan dev server
+```
 
-- **Java**: file dengan `package` declaration belum didukung — asumsinya
-  semua file flat/single-package. Nama class harus sama dengan nama file
-  (aturan Java standar).
-- **TypeScript**: run pertama kali agak lambat karena `npx tsx` mengunduh
-  paket tsx dulu; setelah itu cepat (sudah ke-cache).
-- Belum ada dukungan untuk project dengan dependency manager sendiri
-  (mis. `package.json` dengan `node_modules`, `Cargo.toml` multi-file,
-  Maven/Gradle). Cocoknya untuk script/latihan single- atau few-file,
-  bukan proyek besar dengan banyak dependency eksternal.
+## Cara Kerja Eksekusi Kode
+
+1. Saat tombol Run ditekan, seluruh file di workspace (bukan hanya file aktif)
+   ditulis ke folder sementara di disk, sehingga proyek multi-file tetap utuh.
+2. Backend Rust membangun perintah shell sesuai bahasanya, misalnya
+   `gcc main.c -o main.out && ./main.out`, lalu menjalankannya.
+3. Output stdout dan stderr di-stream secara real-time ke panel terminal.
+4. Input dari kotak teks terminal dikirim langsung ke stdin proses yang
+   sedang berjalan, sehingga mendukung `input()`, `Scanner`, `scanf`, dan
+   sejenisnya.
+5. Tombol Stop menghentikan seluruh process tree, bukan hanya proses shell
+   pembungkusnya.
+6. Hanya satu program yang dapat berjalan dalam satu waktu.
+
+## Keterbatasan
+
+- File Java dengan deklarasi `package` belum didukung; nama class harus
+  sama dengan nama file sesuai aturan Java standar.
+- Eksekusi TypeScript pertama kali sedikit lebih lambat karena `npx tsx`
+  perlu mengunduh paket tsx; setelahnya sudah ter-cache dan lebih cepat.
+- Belum ada dukungan untuk proyek dengan dependency manager sendiri
+  (`node_modules`, Maven/Gradle, Cargo multi-crate, dan sejenisnya). FareIDE
+  cocok untuk skrip dan latihan single-file atau few-file.
